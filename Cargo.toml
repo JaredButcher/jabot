@@ -1,0 +1,11 @@
+[package]
+name = "jabot"
+version = "0.1.0"
+authors = ["Jared Butcher <jared.butcher1219@gmail.com>"]
+edition = "2024"
+
+[dependencies]
+serenity = "0.12"
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite"] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+dotenv = "0.15"
