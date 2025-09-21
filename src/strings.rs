@@ -27,8 +27,8 @@ impl Strings {
     pub const CMD_SS_JOIN_NAME: &'static str = "join";
     pub const CMD_SS_JOIN_DESC: &'static str = "Join a Secret Santa Event that you are invited to";
     pub const CMD_SS_WISH_NAME: &'static str = "wish";
-    pub const CMD_SS_WISH_DESC: &'static str = "Set a message to give to your secret santa to help them.";
-
+    pub const CMD_SS_WISH_DESC: &'static str =
+        "Set a message to give to your secret santa to help them.";
 
     // Option names and descriptions
     pub const OPT_TEXT: &'static str = "text";
@@ -45,6 +45,7 @@ impl Strings {
     pub const MODAL_SS_MODIFY_ID: &'static str = "ss:create:modal";
     pub const MODAL_SS_INFO_ID: &'static str = "ss:info:modal";
     pub const MODAL_SS_CREATE_TITLE: &'static str = "Secret Santa Event";
+    pub const MODAL_SS_CREATE_EDIT_TITLE: &'static str = "Modify Secret Santa Event";
     pub const MODAL_SS_INFO_NAME_ID: &'static str = "ss:info:name";
     pub const MODAL_SS_INFO_NAME_LABEL: &'static str = "Event Name";
     pub const MODAL_SS_INFO_NAME_PLACEHOLDER: &'static str = "Enter event name...";

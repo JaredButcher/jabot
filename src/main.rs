@@ -1,7 +1,9 @@
 use serenity::all::{
-    Action, ActionRowComponent, Command, CommandOptionType, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateInteractionResponseMessage, CreateModal, InputTextStyle, Interaction
+    Action, ActionRowComponent, Command, CommandOptionType, CreateCommand, CreateCommandOption,
+    CreateInputText, CreateInteractionResponse, CreateInteractionResponseMessage, CreateModal,
+    InputTextStyle, Interaction,
 };
-use serenity::async_trait;
+use serenity::{async_trait, cache};
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
@@ -12,8 +14,55 @@ use std::fs;
 mod strings;
 use strings::Strings;
 
-struct Bot{
+const SS_HOST_EVENT_LIMIT: i32 = 32;
+
+struct Bot {
     database: sqlx::SqlitePool,
+}
+
+enum SSState {
+    PreRun,
+    Running,
+    Finished,
+}
+
+impl From<SSState> for i32 {
+    fn from(state: SSState) -> Self {
+        match state {
+            SSState::PreRun => 0,
+            SSState::Running => 1,
+            SSState::Finished => 2,
+        }
+    }
+}
+impl From<i32> for SSState {
+    fn from(value: i32) -> Self {
+        match value {
+            0 => SSState::PreRun,
+            1 => SSState::Running,
+            2 => SSState::Finished,
+            _ => SSState::PreRun, // Default to PreRun for invalid values
+        }
+    }
+}
+
+impl Bot {
+    async fn add_user_to_event(
+        &self,
+        user: i64,
+        event: i64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // If event_participants entry does not already exist for this user and event pair, insert one.
+        sqlx::query!(
+            "INSERT OR IGNORE INTO event_participants (user_id, event_id, joined) VALUES (?, ?, FALSE)",
+            user,
+            event
+        )
+        .execute(&self.database)
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -44,30 +93,32 @@ impl EventHandler for Bot {
                         if let Some(cmd_name_opt) = command.data.options.get(0) {
                             match cmd_name_opt.name.as_str() {
                                 Strings::CMD_SS_CREATE_NAME => {
-                                    if let Some(evt_id_opt) = command.data.options.get(1) && evt_id_opt.kind() == CommandOptionType::Integer{
+                                    if let serenity::all::CommandDataOptionValue::SubCommand(sub_cmd) = &command.data.options.get(0).unwrap().value &&
+                                     let Some(evt_id_opt) = sub_cmd.get(0) &&
+                                      evt_id_opt.kind() == CommandOptionType::Integer{
                                         let evt_id = evt_id_opt.value.as_i64().unwrap();
                                         if let Ok(rec) = sqlx::query!("SELECT * FROM events WHERE id = ?", evt_id).fetch_one(&self.database).await {
                                             if rec.host_id == i64::from(command.user.id) {
                                                 // Send modal to modify event
                                                 CreateInteractionResponse::Modal(
-                                                    CreateModal::new(format!("{}:{}", Strings::MODAL_SS_CREATE_ID, rec.host_id), Strings::MODAL_SS_CREATE_TITLE)
+                                                    CreateModal::new(format!("{}:{}", Strings::MODAL_SS_CREATE_ID, evt_id), Strings::MODAL_SS_CREATE_EDIT_TITLE)
                                                     .components(vec![
                                                         serenity::builder::CreateActionRow::InputText(
                                                             serenity::builder::CreateInputText::new(
-                                                                InputTextStyle::Short, 
-                                                                Strings::MODAL_SS_INFO_NAME_LABEL, 
+                                                                InputTextStyle::Short,
+                                                                Strings::MODAL_SS_INFO_NAME_LABEL,
                                                                 Strings::MODAL_SS_INFO_NAME_ID
                                                             )
-                                                            .placeholder(rec.name)
+                                                            .value(rec.name)
                                                             .required(true)
                                                         ),
                                                         serenity::builder::CreateActionRow::InputText(
                                                             serenity::builder::CreateInputText::new(
-                                                                InputTextStyle::Short, 
-                                                                Strings::MODAL_SS_INFO_DESC_LABEL, 
+                                                                InputTextStyle::Short,
+                                                                Strings::MODAL_SS_INFO_DESC_LABEL,
                                                                 Strings::MODAL_SS_INFO_DESC_ID
                                                             )
-                                                            .placeholder(rec.description.unwrap_or("".to_string()))
+                                                            .value(rec.description.unwrap_or("".to_string()))
                                                             .required(false)
                                                         ),
                                                     ])
@@ -92,16 +143,16 @@ impl EventHandler for Bot {
                                             .components(vec![
                                                 serenity::builder::CreateActionRow::InputText(
                                                     serenity::builder::CreateInputText::new(
-                                                        InputTextStyle::Short, 
-                                                        Strings::MODAL_SS_INFO_NAME_LABEL, 
+                                                        InputTextStyle::Short,
+                                                        Strings::MODAL_SS_INFO_NAME_LABEL,
                                                         Strings::MODAL_SS_INFO_NAME_ID
                                                     )
                                                     .required(true)
                                                 ),
                                                 serenity::builder::CreateActionRow::InputText(
                                                     serenity::builder::CreateInputText::new(
-                                                        InputTextStyle::Short, 
-                                                        Strings::MODAL_SS_INFO_DESC_LABEL, 
+                                                        InputTextStyle::Short,
+                                                        Strings::MODAL_SS_INFO_DESC_LABEL,
                                                         Strings::MODAL_SS_INFO_DESC_ID
                                                     )
                                                     .required(false)
@@ -109,8 +160,6 @@ impl EventHandler for Bot {
                                             ])
                                         )
                                     }
-
-                                    
                                 },
                                 Strings::CMD_SS_INFO_NAME => {
                                     CreateInteractionResponse::Message(
@@ -136,7 +185,7 @@ impl EventHandler for Bot {
                                             ),
                                             serenity::all::CreateActionRow::SelectMenu(
                                                 serenity::all::CreateSelectMenu::new(
-                                                    Strings::MODAL_SS_INFO_USERS_ID, 
+                                                    Strings::MODAL_SS_INFO_USERS_ID,
                                                     serenity::all::CreateSelectMenuKind::User {
                                                         default_users: vec![].into()
                                                     }
@@ -188,11 +237,26 @@ impl EventHandler for Bot {
                                         ]),
                                     ]);
                                     CreateInteractionResponse::Modal(modal)*/
-                                
                                 },
                                 Strings::CMD_SS_LIST_NAME => {
+                                    let host_id = i64::from(command.user.id);
+                                    let evts = sqlx::query!("SELECT e.*, ep.user_id FROM events e JOIN event_participants ep ON e.id = ep.event_id WHERE ep.user_id = ?", host_id)
+                                    .fetch_all(&self.database).await.expect("Failed to fetch events");
+
+                                    let mut result_str: String = "---Events---\r\n".to_string();
+                                    for evt in evts {
+                                        // Get host user from Discord API/cache
+                                        let host_user_id = serenity::model::id::UserId::new(evt.host_id as u64);
+                                        let host_name = match host_user_id.to_user(&ctx.http).await {
+                                            Ok(user) => user.name,
+                                            Err(_) => format!("Unknown User ({})", evt.host_id)
+                                        };
+
+                                        result_str += format!("ID: {}\r\n Name: {}\r\n Description: {}\r\n Status: {}\r\n Host: {}\r\n\r\n", evt.id, evt.name, evt.description.unwrap_or("".to_string()), evt.status, host_name).as_str();
+                                    }
+
                                     CreateInteractionResponse::Message(
-                                        serenity::builder::CreateInteractionResponseMessage::new().content("List")
+                                        serenity::builder::CreateInteractionResponseMessage::new().content(result_str)
                                     )
                                 },
                                 Strings::CMD_SS_JOIN_NAME => {
@@ -222,7 +286,7 @@ impl EventHandler for Bot {
                 }).await {
                     println!("Cannot respond to slash command: {}", why);
                 }
-            },
+            }
             Interaction::Modal(modal) => match modal.data.custom_id.as_str() {
                 Strings::MODAL_SS_INFO_ID => {
                     let mut name = Strings::DEFAULT_SS_NAME.to_string();
@@ -234,19 +298,15 @@ impl EventHandler for Bot {
                                     match input.custom_id.as_str() {
                                         Strings::MODAL_SS_INFO_NAME_ID => {
                                             name = input.value.clone().unwrap();
-                                        },
+                                        }
                                         Strings::MODAL_SS_INFO_DESC_ID => {
                                             desc = input.value.clone().unwrap();
-                                        },
+                                        }
                                         _ => {}
                                     }
-                                },
-                                ActionRowComponent::Button(input) => {
-
-                                },
-                                ActionRowComponent::SelectMenu(input) => {
-                                    
-                                },
+                                }
+                                ActionRowComponent::Button(input) => {}
+                                ActionRowComponent::SelectMenu(input) => {}
                                 _ => {}
                             }
                         }
@@ -261,31 +321,187 @@ impl EventHandler for Bot {
                     if let Err(why) = modal.create_response(&ctx.http, builder).await {
                         println!("Cannot respond to modal: {}", why);
                     }
-                },
+                }
                 Strings::MODAL_SS_CREATE_ID => {
                     // Create Event
-                    let mut name: Option<String> = None;
-                    let mut description: Option<String> = None;
-                    for comp in modal.data.components.iter().flat_map(|e| e.components.iter()) {
+                    let mut name: String = Strings::DEFAULT_SS_NAME.to_string();
+                    let mut description: String = Strings::DEFAULT_SS_DESCRIPTION.to_string();
+                    for comp in modal
+                        .data
+                        .components
+                        .iter()
+                        .flat_map(|e| e.components.iter())
+                    {
                         if let ActionRowComponent::InputText(input_text_comp) = comp {
                             match input_text_comp.custom_id.as_str() {
                                 Strings::MODAL_SS_INFO_NAME_ID => {
-                                    name = input_text_comp.value.clone();
-                                },
+                                    if let Some(value) = input_text_comp.value.clone() {
+                                        name = value;
+                                    }
+                                }
                                 Strings::MODAL_SS_INFO_DESC_ID => {
-                                    description = input_text_comp.value.clone();
-                                },
-                                c => { println!("Unreconnized component ss create {}", c) }
+                                    if let Some(value) = input_text_comp.value.clone() {
+                                        description = value;
+                                    }
+                                }
+                                c => {
+                                    println!("Unreconnized component ss create {}", c)
+                                }
                             }
                         }
                     }
                     // Insert host if not present
-                    // Insert make sure below event limit per host
+                    let host_id = i64::from(modal.user.id);
+                    sqlx::query!("INSERT INTO event_users (id, global_wish) SELECT ?, ? WHERE NOT EXISTS ( SELECT 1 FROM event_users WHERE id = ? )",
+                    host_id, "", host_id).execute(&self.database).await.expect("Failed to check / insert host");
+
+                    // Check if host has reached event limit
+                    let pre_run_status = i32::from(SSState::PreRun);
+                    let running_status = i32::from(SSState::Running);
+                    let active_events = sqlx::query!("SELECT COUNT(*) as count FROM events WHERE host_id = ? AND (status = ? OR status = ?)",
+                        host_id, pre_run_status, running_status)
+                        .fetch_one(&self.database).await.expect("Failed to count host events");
+
+                    if active_events.count >= SS_HOST_EVENT_LIMIT as i64 {
+                        // Send error message that host has reached limit
+                        if let Err(why) = modal.create_response(&ctx.http,
+                            CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content(format!("Cannot create event: You have reached the limit of {} active events", SS_HOST_EVENT_LIMIT))
+                            )
+                        ).await {
+                            println!("Cannot respond to modal: {}", why);
+                        }
+                        return;
+                    }
+
                     // Insert event
-                    sqlx::query!("INSERT INTO events (name, description, host_id, status) VALUES (?, ?, ?, ?)")
-                },
+                    let result = sqlx::query!("INSERT INTO events (name, description, host_id, status) VALUES (?, ?, ?, ?)", name, description, host_id, pre_run_status).execute(&self.database).await.expect("Failed to insert event");
+                    let event_id = result.last_insert_rowid();
+
+                    // Add the host as a participant in their own event
+                    if let Err(err) = self.add_user_to_event(host_id, event_id).await {
+                        println!("Failed to add host to event: {}", err);
+                    }
+
+                    if let Err(why) = modal
+                        .create_response(
+                            &ctx.http,
+                            CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content(format!("Event created {}", name)),
+                            ),
+                        )
+                        .await
+                    {
+                        println!("Cannot respond to modal: {}", why);
+                    }
+                    return;
+                }
                 c if c.contains(Strings::MODAL_SS_CREATE_ID) => {
                     // Modify Event
+                    if let Some(evt_id_str) = c.splitn(8, ":").last()
+                        && let Ok(evt_id) = evt_id_str.parse::<i64>()
+                    {
+                        let mut name: Option<String> = None;
+                        let mut description: Option<String> = None;
+                        for comp in modal
+                            .data
+                            .components
+                            .iter()
+                            .flat_map(|e| e.components.iter())
+                        {
+                            if let ActionRowComponent::InputText(input_text_comp) = comp {
+                                match input_text_comp.custom_id.as_str() {
+                                    Strings::MODAL_SS_INFO_NAME_ID => {
+                                        name = input_text_comp.value.clone();
+                                    }
+                                    Strings::MODAL_SS_INFO_DESC_ID => {
+                                        description = input_text_comp.value.clone();
+                                    }
+                                    c => {
+                                        println!("Unreconnized component ss create {}", c)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fetch existing event if it exists and the command's user is the host
+                        if let Ok(existing_event) =
+                            sqlx::query!("SELECT * FROM events WHERE id = ?", evt_id)
+                                .fetch_one(&self.database)
+                                .await
+                        {
+                            if existing_event.host_id == i64::from(modal.user.id) {
+                                // Modify existing event
+                                let update_name = name.unwrap_or(existing_event.name);
+                                let update_description = description.or(existing_event.description);
+
+                                sqlx::query!(
+                                    "UPDATE events SET name = ?, description = ? WHERE id = ?",
+                                    update_name,
+                                    update_description,
+                                    evt_id
+                                )
+                                .execute(&self.database)
+                                .await
+                                .expect("Failed to update event");
+
+                                println!("Event '{}' updated", update_name);
+                                if let Err(why) = modal
+                                    .create_response(
+                                        &ctx.http,
+                                        CreateInteractionResponse::Message(
+                                            CreateInteractionResponseMessage::new().content(
+                                                format!(
+                                                    "Event '{}' updated successfully",
+                                                    update_name
+                                                ),
+                                            ),
+                                        ),
+                                    )
+                                    .await
+                                {
+                                    println!("Cannot respond to modal: {}", why);
+                                }
+                            } else {
+                                if let Err(why) = modal.create_response(&ctx.http,
+                                    CreateInteractionResponse::Message(
+                                        CreateInteractionResponseMessage::new()
+                                            .content("Cannot modify event: You are not the host of this event")
+                                    )
+                                ).await {
+                                    println!("Cannot respond to modal: {}", why);
+                                }
+                            }
+                        } else {
+                            if let Err(why) = modal
+                                .create_response(
+                                    &ctx.http,
+                                    CreateInteractionResponse::Message(
+                                        CreateInteractionResponseMessage::new()
+                                            .content("Event not found"),
+                                    ),
+                                )
+                                .await
+                            {
+                                println!("Cannot respond to modal: {}", why);
+                            }
+                        }
+                    } else {
+                        if let Err(why) = modal
+                            .create_response(
+                                &ctx.http,
+                                CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("Invalid event ID"),
+                                ),
+                            )
+                            .await
+                        {
+                            println!("Cannot respond to modal: {}", why);
+                        }
+                    }
                 }
                 _ => {
                     println!("Unknown modal ID: {}", modal.data.custom_id);
@@ -317,9 +533,9 @@ impl EventHandler for Bot {
         ss
             create - modal - name, description
             info - name, description, wish, users, host, start, delete, leave, request wish
-            - join - 
+            - join -
             wish - modal - wish
-            list - 
+            list -
          */
 
         cmds.push(
@@ -332,11 +548,14 @@ impl EventHandler for Bot {
                         Strings::CMD_SS_CREATE_NAME,
                         Strings::CMD_SS_CREATE_DESC,
                     )
-                    .add_sub_option(CreateCommandOption::new(
-                        CommandOptionType::Integer,
-                        Strings::OPT_SS_EVT_ID_NAME,
-                        Strings::OPT_SS_EVT_ID_DESC,
-                    )),
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::Integer,
+                            Strings::OPT_SS_EVT_ID_NAME,
+                            Strings::OPT_SS_EVT_ID_DESC,
+                        )
+                        .required(false),
+                    ),
                 )
                 .add_option(
                     CreateCommandOption::new(
@@ -416,17 +635,18 @@ async fn main() {
         .max_connections(5)
         .connect_with(
             sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(std::env::var("DATABASE_URL").expect("Database url not in enviroment"))
-            .create_if_missing(true),
+                .filename(std::env::var("DATABASE_URL").expect("Database url not in enviroment"))
+                .create_if_missing(true),
         )
         .await
         .expect("Failed to connect to database");
 
-    sqlx::migrate!("./migrations").run(&database).await.expect("Couldn't run database migrations");
+    sqlx::migrate!("./migrations")
+        .run(&database)
+        .await
+        .expect("Couldn't run database migrations");
 
-    let bot = Bot {
-        database: database,
-    };
+    let bot = Bot { database: database };
 
     let mut client = Client::builder(&token, intents)
         .event_handler(bot)
