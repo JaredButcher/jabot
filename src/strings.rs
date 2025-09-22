@@ -52,11 +52,13 @@ impl Strings {
     pub const MODAL_SS_INFO_DESC_ID: &'static str = "ss:info:description";
     pub const MODAL_SS_INFO_DESC_LABEL: &'static str = "Event Description";
     pub const MODAL_SS_INFO_DESC_PLACEHOLDER: &'static str = "Enter event description...";
-    pub const MODAL_SS_INFO_USERS_ID: &'static str = "ss:info:users";
 
     // Modal response messages
     pub const MSG_SS_EVENT_CREATED: &'static str =
         "Secret Santa Event Created!\nName: {}\nDescription: {}";
     pub const MSG_NO_DESCRIPTION: &'static str = "No description provided";
     pub const MSG_UNKNOWN_NAME: &'static str = "Unknown";
+
+    // Component ids
+    pub const COMP_SS_INFO_USER_ID: &'static str = "ss:info:users";
 }

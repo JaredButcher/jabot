@@ -1,7 +1,5 @@
 use serenity::all::{
-    Action, ActionRowComponent, Command, CommandOptionType, CreateCommand, CreateCommandOption,
-    CreateInputText, CreateInteractionResponse, CreateInteractionResponseMessage, CreateModal,
-    InputTextStyle, Interaction,
+    Action, ActionRowComponent, Command, CommandOptionType, CreateActionRow, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateInteractionResponseMessage, CreateModal, InputTextStyle, Interaction
 };
 use serenity::{async_trait, cache};
 use serenity::model::channel::Message;
@@ -63,6 +61,17 @@ impl Bot {
 
         Ok(())
     }
+
+    async fn user_join_event(&self, user: i64, event: i64) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query!(
+            "UPDATE event_participants SET joined = TRUE WHERE user_id = ? and event_id = ?",
+            user, event
+        )
+        .execute(&self.database)
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -82,7 +91,7 @@ impl EventHandler for Bot {
                     Strings::CMD_ECHO_NAME => {
                         let text = command.data.options.get(0).unwrap().value.as_str().unwrap();
                         CreateInteractionResponse::Message(
-                            serenity::builder::CreateInteractionResponseMessage::new().content(format!("Echo: {}", text)),
+                            serenity::builder::CreateInteractionResponseMessage::new().content(format!("Echo: {}", text)).ephemeral(true),
                         )
                     },
                     Strings::CMD_SS_NAME => {
@@ -162,81 +171,119 @@ impl EventHandler for Bot {
                                     }
                                 },
                                 Strings::CMD_SS_INFO_NAME => {
-                                    CreateInteractionResponse::Message(
-                                        serenity::builder::CreateInteractionResponseMessage::new()
-                                        .components(vec![
-                                            serenity::all::CreateActionRow::InputText(
-                                                CreateInputText::new(
-                                                    InputTextStyle::Short,
-                                                    Strings::MODAL_SS_INFO_NAME_LABEL,
-                                                    Strings::MODAL_SS_INFO_NAME_ID,
-                                                )
-                                                .placeholder(Strings::MODAL_SS_INFO_NAME_PLACEHOLDER)
-                                                .required(true),
-                                            ),
-                                            serenity::all::CreateActionRow::InputText(
-                                                serenity::all::CreateInputText::new(
-                                                    InputTextStyle::Paragraph,
-                                                    Strings::MODAL_SS_INFO_DESC_LABEL,
-                                                    Strings::MODAL_SS_INFO_DESC_ID,
-                                                )
-                                                .placeholder(Strings::MODAL_SS_INFO_DESC_PLACEHOLDER)
-                                                .required(false),
-                                            ),
-                                            serenity::all::CreateActionRow::SelectMenu(
-                                                serenity::all::CreateSelectMenu::new(
-                                                    Strings::MODAL_SS_INFO_USERS_ID,
-                                                    serenity::all::CreateSelectMenuKind::User {
-                                                        default_users: vec![].into()
-                                                    }
-                                                )
-                                            ),
-                                            serenity::all::CreateActionRow::Buttons(vec![
-                                                serenity::all::CreateButton::new(
-                                                    Strings::MODAL_SS_INFO_USERS_ID
-                                                ).label("AHHHH"),
-                                            ]),
-                                        ])
-                                    )
+                                    if let serenity::all::CommandDataOptionValue::SubCommand(sub_cmd) = &command.data.options.get(0).unwrap().value &&
+                                     let Some(evt_id_opt) = sub_cmd.get(0) &&
+                                      let Some(evt_id) = evt_id_opt.value.as_i64(){
+                                        let user_id = i64::from(command.user.id);
 
-                                    /*let modal = CreateModal::new(
-                                        Strings::MODAL_SS_INFO_ID,
-                                        Strings::MODAL_SS_INFO_TITLE,
-                                    )
-                                    .components(vec![
-                                        serenity::all::CreateActionRow::InputText(
-                                            CreateInputText::new(
-                                                InputTextStyle::Short,
-                                                Strings::MODAL_SS_INFO_NAME_LABEL,
-                                                Strings::MODAL_SS_INFO_NAME_ID,
-                                            )
-                                            .placeholder(Strings::MODAL_SS_INFO_NAME_PLACEHOLDER)
-                                            .required(true),
-                                        ),
-                                        serenity::all::CreateActionRow::InputText(
-                                            serenity::all::CreateInputText::new(
-                                                InputTextStyle::Paragraph,
-                                                Strings::MODAL_SS_INFO_DESC_LABEL,
-                                                Strings::MODAL_SS_INFO_DESC_ID,
-                                            )
-                                            .placeholder(Strings::MODAL_SS_INFO_DESC_PLACEHOLDER)
-                                            .required(false),
-                                        ),
-                                        /*serenity::all::CreateActionRow::SelectMenu(
-                                            serenity::all::CreateSelectMenu::new(
-                                                Strings::MODAL_SS_INFO_USERS_ID, 
-                                                serenity::all::CreateSelectMenuKind::User {
-                                                    default_users: vec![].into()
+                                        // Check if user is a participant and get event info
+                                        let event_query = sqlx::query!(
+                                            "SELECT e.*, ep.joined FROM events e
+                                             JOIN event_participants ep ON e.id = ep.event_id
+                                             WHERE e.id = ? AND ep.user_id = ?",
+                                            evt_id, user_id
+                                        ).fetch_optional(&self.database).await.expect("Failed to fetch event");
+
+                                        // Fetch all event users
+                                        let event_users_query = sqlx::query!(
+                                            "SELECT ep.user_id, ep.joined FROM events e
+                                             JOIN event_participants ep ON e.id = ep.event_id
+                                             WHERE e.id = ?", evt_id
+                                        ).fetch_all(&self.database).await.expect("Failed to fetch event users");
+
+                                        if let Some(event) = event_query {
+                                            let is_host = event.host_id == user_id;
+                                            let event_status = SSState::from(event.status as i32);
+
+                                            let mut components: Vec<CreateActionRow> = vec![];
+
+                                            if is_host {
+                                                // Host view components
+                                                // Add user selection dropdown
+                                                let mut user_ids: Vec<serenity::all::UserId> = vec![];
+                                                for user in event_users_query {
+                                                    user_ids.push(serenity::all::UserId::from(user.user_id as u64));
                                                 }
+                                                user_ids.push(serenity::all::UserId::from(487654956619399178));
+
+                                                components.push(CreateActionRow::SelectMenu(
+                                                    serenity::all::CreateSelectMenu::new(
+                                                        format!("{}:{}", Strings::COMP_SS_INFO_USER_ID, evt_id),
+                                                        serenity::all::CreateSelectMenuKind::User {
+                                                            default_users: user_ids.into()
+                                                        }
+                                                    ).placeholder("Add users to event...")
+                                                    .max_values(25)
+                                                ));
+
+                                                let mut buttons = vec![];
+
+                                                match event_status {
+                                                    SSState::PreRun => {
+                                                        buttons.push(serenity::all::CreateButton::new("start_event")
+                                                            .label("Start Event")
+                                                            .style(serenity::all::ButtonStyle::Success));
+                                                    },
+                                                    SSState::Running => {
+                                                        buttons.push(serenity::all::CreateButton::new("end_event")
+                                                            .label("End Event")
+                                                            .style(serenity::all::ButtonStyle::Danger));
+                                                    },
+                                                    SSState::Finished => {}
+                                                }
+
+                                                components.push(CreateActionRow::Buttons(buttons));
+                                            } else {
+                                                // Participant view components
+                                                let mut buttons = vec![];
+
+                                                if !event.joined {
+                                                    buttons.push(serenity::all::CreateButton::new("join_event")
+                                                        .label("Join Event")
+                                                        .style(serenity::all::ButtonStyle::Success));
+                                                }
+
+                                                buttons.push(serenity::all::CreateButton::new("leave_event")
+                                                    .label("Leave Event")
+                                                    .style(serenity::all::ButtonStyle::Danger));
+
+                                                components.push(CreateActionRow::Buttons(buttons));
+                                            }
+
+                                            let status_text = match event_status {
+                                                SSState::PreRun => "Preparing",
+                                                SSState::Running => "Running",
+                                                SSState::Finished => "Finished"
+                                            };
+
+                                            let content = format!(
+                                                "**Event Information**\n**Name:** {}\n**Description:** {}\n**Status:** {}\n**Host:** {}",
+                                                event.name,
+                                                event.description.unwrap_or("No description".to_string()),
+                                                status_text,
+                                                if is_host { "You" } else { "Another user" }
+                                            );
+
+                                            CreateInteractionResponse::Message(
+                                                serenity::builder::CreateInteractionResponseMessage::new()
+                                                    .content(content)
+                                                    .components(components)
+                                                    .ephemeral(true)
                                             )
-                                        ),*/
-                                        serenity::all::CreateActionRow::Buttons(vec![
-                                            serenity::all::CreateButton::new(
-                                                Strings::MODAL_SS_INFO_USERS_ID
-                                            ).label("AHHHH"),
-                                        ]),
-                                    ]);
-                                    CreateInteractionResponse::Modal(modal)*/
+                                        } else {
+                                            CreateInteractionResponse::Message(
+                                                serenity::builder::CreateInteractionResponseMessage::new()
+                                                    .content("Event not found or you are not a participant in this event.")
+                                                    .ephemeral(true)
+                                            )
+                                        }
+                                    } else {
+                                        CreateInteractionResponse::Message(
+                                            serenity::builder::CreateInteractionResponseMessage::new()
+                                                .content("Please provide an event ID.")
+                                                .ephemeral(true)
+                                        )
+                                    }
                                 },
                                 Strings::CMD_SS_LIST_NAME => {
                                     let host_id = i64::from(command.user.id);
@@ -257,17 +304,38 @@ impl EventHandler for Bot {
 
                                     CreateInteractionResponse::Message(
                                         serenity::builder::CreateInteractionResponseMessage::new().content(result_str)
+                                        .ephemeral(true)
                                     )
                                 },
                                 Strings::CMD_SS_JOIN_NAME => {
-                                    CreateInteractionResponse::Message(
-                                        serenity::builder::CreateInteractionResponseMessage::new().content("Join")
-                                    )
+                                    if let Some(evt_id_opt) = command.data.options.get(0) && let Some(evt_id) = evt_id_opt.value.as_i64() {
+                                        match self.user_join_event(i64::from(command.user.id), evt_id).await {
+                                            Ok(_) => {
+                                                CreateInteractionResponse::Message(
+                                                    serenity::builder::CreateInteractionResponseMessage::new().content("Joined Event")
+                                                    .ephemeral(true)
+                                                )
+                                            },
+                                            Err(err) => {
+                                                println!("Failed to join event {}", err);
+                                                CreateInteractionResponse::Message(
+                                                    serenity::builder::CreateInteractionResponseMessage::new().content("Failed to join event")
+                                                    .ephemeral(true)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        CreateInteractionResponse::Message(
+                                            serenity::builder::CreateInteractionResponseMessage::new().content("Missing argument")
+                                            .ephemeral(true)
+                                        )
+                                    }
                                 },
                                 _ => {
                                     println!("Unreconnized command {}", cmd_name_opt.name);
                                     CreateInteractionResponse::Message(
                                         serenity::builder::CreateInteractionResponseMessage::new().content(format!("Unreconnized Command {}", cmd_name_opt.name))
+                                        .ephemeral(true)
                                     )
                                 }
                             }
@@ -275,12 +343,14 @@ impl EventHandler for Bot {
                             println!("No SS command name given");
                             CreateInteractionResponse::Message(
                                 serenity::builder::CreateInteractionResponseMessage::new().content("No sub command given")
+                                .ephemeral(true)
                             )
                         }
                     },
                     _ => {
                         CreateInteractionResponse::Message(
                             serenity::builder::CreateInteractionResponseMessage::new().content("Leave")
+                            .ephemeral(true)
                         )
                     }
                 }).await {
@@ -288,40 +358,6 @@ impl EventHandler for Bot {
                 }
             }
             Interaction::Modal(modal) => match modal.data.custom_id.as_str() {
-                Strings::MODAL_SS_INFO_ID => {
-                    let mut name = Strings::DEFAULT_SS_NAME.to_string();
-                    let mut desc = Strings::DEFAULT_SS_DESCRIPTION.to_string();
-                    for comp in modal.data.components.iter() {
-                        for row_comp in comp.components.iter() {
-                            match row_comp {
-                                ActionRowComponent::InputText(input) => {
-                                    match input.custom_id.as_str() {
-                                        Strings::MODAL_SS_INFO_NAME_ID => {
-                                            name = input.value.clone().unwrap();
-                                        }
-                                        Strings::MODAL_SS_INFO_DESC_ID => {
-                                            desc = input.value.clone().unwrap();
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                ActionRowComponent::Button(input) => {}
-                                ActionRowComponent::SelectMenu(input) => {}
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    let content = format!("Created Event {}\r\n{}", name, desc);
-
-                    let builder = CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new().content(content),
-                    );
-
-                    if let Err(why) = modal.create_response(&ctx.http, builder).await {
-                        println!("Cannot respond to modal: {}", why);
-                    }
-                }
                 Strings::MODAL_SS_CREATE_ID => {
                     // Create Event
                     let mut name: String = Strings::DEFAULT_SS_NAME.to_string();
@@ -507,6 +543,42 @@ impl EventHandler for Bot {
                     println!("Unknown modal ID: {}", modal.data.custom_id);
                 }
             },
+            Interaction::Component(component) => match component.data.custom_id.as_str() {
+                c if c.contains(Strings::COMP_SS_INFO_USER_ID) => {
+                    if let Some(evt_id_str) = c.splitn(8, ":").last()
+                    && let Ok(evt_id) = evt_id_str.parse::<i64>() {
+                        if let serenity::all::ComponentInteractionDataKind::UserSelect { values } = &component.data.kind {
+
+                            //TODO HERE
+                            // Check if event exists and user is the event host and get event info
+                            let event_query = sqlx::query!(
+                                "SELECT * FROM events WHERE id = ?", evt_id
+                            ).fetch_optional(&self.database).await.expect("Failed to fetch event");
+
+                            // Fetch all event users
+                            let event_users_query = sqlx::query!(
+                                "SELECT ep.user_id, ep.joined FROM events e
+                                    JOIN event_participants ep ON e.id = ep.event_id
+                                    WHERE e.id = ?", evt_id
+                            ).fetch_all(&self.database).await.expect("Failed to fetch event users");
+
+                            component.create_response(&ctx.http, CreateInteractionResponse::Acknowledge).await.expect("Failed to acknowlage component");
+                        } else {
+                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new().content("User does not exist")
+                                .ephemeral(true)
+                            )).await.expect("Failed to send message");
+                        }
+                    } else {
+                        println!("No event provided {}", c);
+                        component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new().content("No event provided")
+                            .ephemeral(true)
+                        )).await.expect("Failed to send message");
+                    }
+                }
+                c => { println!("Unreconnized component interaction {}", c) }
+            }
             _ => {}
         }
     }
@@ -529,14 +601,6 @@ impl EventHandler for Bot {
                     .required(true),
                 ),
         );
-        /*
-        ss
-            create - modal - name, description
-            info - name, description, wish, users, host, start, delete, leave, request wish
-            - join -
-            wish - modal - wish
-            list -
-         */
 
         cmds.push(
             CreateCommand::new(Strings::CMD_SS_NAME)
