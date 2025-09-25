@@ -61,4 +61,10 @@ impl Strings {
 
     // Component ids
     pub const COMP_SS_INFO_USER_ID: &'static str = "ss:info:users";
+    pub const COMP_SS_BTN_START_ID: &'static str = "ss:btn:start";
+    pub const COMP_SS_BTN_END_ID: &'static str = "ss:btn:end";
+    pub const COMP_SS_BTN_CANCEL_ID: &'static str = "ss:btn:cancel";
+    pub const COMP_SS_BTN_LEAVE_ID: &'static str = "ss:btn:leave";
+    
+
 }

@@ -1,5 +1,5 @@
 use serenity::all::{
-    Action, ActionRowComponent, Command, CommandOptionType, CreateActionRow, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateInteractionResponseMessage, CreateModal, InputTextStyle, Interaction
+    Action, ActionRowComponent, Command, CommandOptionType, CreateActionRow, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, CreateModal, InputTextStyle, Interaction
 };
 use serenity::{async_trait, cache};
 use serenity::model::channel::Message;
@@ -8,6 +8,7 @@ use serenity::prelude::*;
 use sqlx::database;
 use std::env;
 use std::fs;
+use rand::seq::SliceRandom;
 
 mod strings;
 use strings::Strings;
@@ -18,6 +19,7 @@ struct Bot {
     database: sqlx::SqlitePool,
 }
 
+#[derive(PartialEq, Eq)]
 enum SSState {
     PreRun,
     Running,
@@ -52,7 +54,7 @@ impl Bot {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // If event_participants entry does not already exist for this user and event pair, insert one.
         sqlx::query!(
-            "INSERT OR IGNORE INTO event_participants (user_id, event_id, joined) VALUES (?, ?, FALSE)",
+            "INSERT OR IGNORE INTO event_participants (user_id, event_id, joined) VALUES (?, ?, TRUE)",
             user,
             event
         )
@@ -77,11 +79,6 @@ impl Bot {
 #[async_trait]
 impl EventHandler for Bot {
     async fn message(&self, ctx: Context, msg: Message) {
-        /*if msg.content == Strings::CMD_ {
-            if let Err(why) = msg.channel_id.say(&ctx.http, Strings::HELLO_RESPONSE).await {
-                println!("Error sending message: {:?}", why);
-            }
-        }*/
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
@@ -204,7 +201,6 @@ impl EventHandler for Bot {
                                                 for user in event_users_query {
                                                     user_ids.push(serenity::all::UserId::from(user.user_id as u64));
                                                 }
-                                                user_ids.push(serenity::all::UserId::from(487654956619399178));
 
                                                 components.push(CreateActionRow::SelectMenu(
                                                     serenity::all::CreateSelectMenu::new(
@@ -218,16 +214,22 @@ impl EventHandler for Bot {
 
                                                 let mut buttons = vec![];
 
+                                                let cancel_btn = serenity::all::CreateButton::new(format!("{}:{}", Strings::COMP_SS_BTN_CANCEL_ID, evt_id.to_string()))
+                                                            .label("Cancel Event")
+                                                            .style(serenity::all::ButtonStyle::Danger);
+
                                                 match event_status {
                                                     SSState::PreRun => {
-                                                        buttons.push(serenity::all::CreateButton::new("start_event")
+                                                        buttons.push(serenity::all::CreateButton::new(format!("{}:{}", Strings::COMP_SS_BTN_START_ID, evt_id.to_string()))
                                                             .label("Start Event")
                                                             .style(serenity::all::ButtonStyle::Success));
+                                                        buttons.push(cancel_btn);
                                                     },
                                                     SSState::Running => {
-                                                        buttons.push(serenity::all::CreateButton::new("end_event")
+                                                        buttons.push(serenity::all::CreateButton::new(format!("{}:{}", Strings::COMP_SS_BTN_END_ID, evt_id.to_string()))
                                                             .label("End Event")
-                                                            .style(serenity::all::ButtonStyle::Danger));
+                                                            .style(serenity::all::ButtonStyle::Success));
+                                                        buttons.push(cancel_btn);
                                                     },
                                                     SSState::Finished => {}
                                                 }
@@ -237,15 +239,9 @@ impl EventHandler for Bot {
                                                 // Participant view components
                                                 let mut buttons = vec![];
 
-                                                if !event.joined {
-                                                    buttons.push(serenity::all::CreateButton::new("join_event")
-                                                        .label("Join Event")
-                                                        .style(serenity::all::ButtonStyle::Success));
-                                                }
-
-                                                buttons.push(serenity::all::CreateButton::new("leave_event")
+                                                /*buttons.push(serenity::all::CreateButton::new(format!("{}:{}", Strings::COMP_SS_BTN_LEAVE_ID, evt_id.to_string()))
                                                     .label("Leave Event")
-                                                    .style(serenity::all::ButtonStyle::Danger));
+                                                    .style(serenity::all::ButtonStyle::Danger));*/
 
                                                 components.push(CreateActionRow::Buttons(buttons));
                                             }
@@ -256,12 +252,17 @@ impl EventHandler for Bot {
                                                 SSState::Finished => "Finished"
                                             };
 
+                                            let host_name = match serenity::all::UserId::new(event.host_id as u64).to_user(&ctx.http).await {
+                                                Ok(u) => u.display_name().to_string(),
+                                                Err(_) => "Another User".to_string()
+                                            };
+
                                             let content = format!(
                                                 "**Event Information**\n**Name:** {}\n**Description:** {}\n**Status:** {}\n**Host:** {}",
                                                 event.name,
                                                 event.description.unwrap_or("No description".to_string()),
                                                 status_text,
-                                                if is_host { "You" } else { "Another user" }
+                                                if is_host { "You" } else { host_name.as_str() }
                                             );
 
                                             CreateInteractionResponse::Message(
@@ -299,7 +300,13 @@ impl EventHandler for Bot {
                                             Err(_) => format!("Unknown User ({})", evt.host_id)
                                         };
 
-                                        result_str += format!("ID: {}\r\n Name: {}\r\n Description: {}\r\n Status: {}\r\n Host: {}\r\n\r\n", evt.id, evt.name, evt.description.unwrap_or("".to_string()), evt.status, host_name).as_str();
+                                        let status_text = match SSState::from(evt.status as i32) {
+                                            SSState::PreRun => "Preparing",
+                                            SSState::Running => "Running",
+                                            SSState::Finished => "Finished"
+                                        };
+
+                                        result_str += format!("**ID:** {}\n**Name:** {}\n**Description:** {}\n **Status:** {}\n**Host:** {}\n\n", evt.id, evt.name, evt.description.unwrap_or("".to_string()), status_text, host_name).as_str();
                                     }
 
                                     CreateInteractionResponse::Message(
@@ -425,7 +432,7 @@ impl EventHandler for Bot {
                             &ctx.http,
                             CreateInteractionResponse::Message(
                                 CreateInteractionResponseMessage::new()
-                                    .content(format!("Event created {}", name)),
+                                    .content(format!("Event created\n**Id:** {}\n**Name:** {}", event_id, name)),
                             ),
                         )
                         .await
@@ -548,12 +555,10 @@ impl EventHandler for Bot {
                     if let Some(evt_id_str) = c.splitn(8, ":").last()
                     && let Ok(evt_id) = evt_id_str.parse::<i64>() {
                         if let serenity::all::ComponentInteractionDataKind::UserSelect { values } = &component.data.kind {
-
-                            //TODO HERE
                             // Check if event exists and user is the event host and get event info
                             let event_query = sqlx::query!(
                                 "SELECT * FROM events WHERE id = ?", evt_id
-                            ).fetch_optional(&self.database).await.expect("Failed to fetch event");
+                            ).fetch_one(&self.database).await.expect("Failed to fetch event");
 
                             // Fetch all event users
                             let event_users_query = sqlx::query!(
@@ -562,7 +567,68 @@ impl EventHandler for Bot {
                                     WHERE e.id = ?", evt_id
                             ).fetch_all(&self.database).await.expect("Failed to fetch event users");
 
+                            // Get existing participant IDs for comparison
+                            let existing_participants: std::collections::HashSet<i64> = event_users_query.iter().map(|p| p.user_id).collect();
+
+                            // Find users to add (selected but not already participating)
+                            let users_to_add: Vec<i64> = values.iter()
+                                .map(|user| u64::from(*user) as i64)
+                                .filter(|&user_id| !existing_participants.contains(&user_id))
+                                .collect();
+                            // Bulk insert all users into event_users and event_participants
+                            if !users_to_add.is_empty() {
+                                // Build VALUES clauses for bulk insert
+                                let user_values: Vec<String> = users_to_add.iter().map(|_| "(?)"[..].to_string()).collect();
+                                let participant_values: Vec<String> = users_to_add.iter().map(|_| "(?, ?, TRUE)"[..].to_string()).collect();
+
+                                let user_query = format!("INSERT OR IGNORE INTO event_users (id) VALUES {}", user_values.join(", "));
+                                let participant_query = format!("INSERT OR IGNORE INTO event_participants (user_id, event_id, joined) VALUES {}", participant_values.join(", "));
+
+                                // Execute user insert
+                                let mut user_query_builder = sqlx::query(&user_query);
+                                for &user_id in &users_to_add {
+                                    user_query_builder = user_query_builder.bind(user_id);
+                                }
+                                user_query_builder.execute(&self.database).await.expect("Failed to bulk insert event_users");
+
+                                // Execute participant insert
+                                let mut participant_query_builder = sqlx::query(&participant_query);
+                                for &user_id in &users_to_add {
+                                    participant_query_builder = participant_query_builder.bind(user_id).bind(evt_id);
+                                }
+                                participant_query_builder.execute(&self.database).await.expect("Failed to bulk insert event_participants");
+                            }
+
+                            let updated_participant_set: std::collections::HashSet<i64> = values.iter().map(|user_id| u64::from(*user_id) as i64 ).collect();
+                            let users_to_remove: Vec<i64> = existing_participants.iter()
+                                .map(|uid| *uid)
+                                .filter(|uid| !updated_participant_set.contains(uid))
+                                .collect();
+
+                            
+                                println!("Modify users add: {:?} remove: {:?}", users_to_add, users_to_remove);
+
+                            // Bulk remove participants no longer selected
+                            if !users_to_remove.is_empty() {
+                                let placeholders: Vec<String> = users_to_remove.iter().map(|_| "?".to_string()).collect();
+                                let remove_query = format!("DELETE FROM event_participants WHERE event_id = ? AND user_id IN ({})", placeholders.join(", "));
+
+                                let mut remove_query_builder = sqlx::query(&remove_query).bind(evt_id);
+                                for &user_id in &users_to_remove {
+                                    remove_query_builder = remove_query_builder.bind(user_id);
+                                }
+                                remove_query_builder.execute(&self.database).await.expect("Failed to bulk remove event_participants");
+                            }
+
                             component.create_response(&ctx.http, CreateInteractionResponse::Acknowledge).await.expect("Failed to acknowlage component");
+
+                            // Notify users afterwards to avoid ack timeout
+                            for &user_id in &users_to_add {
+                                let user = serenity::all::UserId::from(user_id as u64);
+                                user.direct_message(&ctx.http, CreateMessage::new()
+                                    .content(format!("You have been invited to a Secret Santa Event: {}\r\n{}", &event_query.name, event_query.description.as_deref().unwrap_or(""))
+                                )).await.expect("Failed to send invite dm");
+                            }
                         } else {
                             component.create_response(&ctx.http, CreateInteractionResponse::Message(
                                 CreateInteractionResponseMessage::new().content("User does not exist")
@@ -577,6 +643,305 @@ impl EventHandler for Bot {
                         )).await.expect("Failed to send message");
                     }
                 }
+                c if c.contains(Strings::COMP_SS_BTN_START_ID) => {
+                    if let Some(evt_id_str) = c.splitn(8, ":").last()
+                    && let Ok(evt_id) = evt_id_str.parse::<i64>() {
+                        // Confirm requesting user is host
+                        let user_id = i64::from(component.user.id);
+
+                        if let Ok(event) = sqlx::query!("SELECT * FROM events WHERE id = ?", evt_id)
+                            .fetch_one(&self.database).await {
+
+                            if event.host_id != user_id {
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("You are not the host of this event")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+                                return;
+                            }
+
+                            // Confrim that event's status is preparing
+                            let current_status = SSState::from(event.status as i32);
+                            if current_status != SSState::PreRun {
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("Event is not in preparing state")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+                                return;
+                            }
+
+                            // Notify each participant that event is now running with the event's name and description
+                            let participants = sqlx::query!(
+                                "SELECT user_id, event_wish FROM event_participants WHERE event_id = ? AND joined = TRUE",
+                                evt_id
+                            ).fetch_all(&self.database).await.expect("Failed to fetch participants");
+
+                            let participants_cnt = participants.iter().count();
+
+                            if participants_cnt > 1 {
+                                // Change event status to running
+                                let running_status = i32::from(SSState::Running);
+                                sqlx::query!("UPDATE events SET status = ? WHERE id = ?", running_status, evt_id)
+                                    .execute(&self.database).await.expect("Failed to update event status");
+
+                                // Shuffle records and assign partipants their secret santas
+                                let mut participants_shuffled: Vec<(i64, i64)> = participants.iter().map(|f| (f.user_id, 0)).collect();
+                                participants_shuffled.shuffle(&mut rand::rng());
+
+                                // Assign each participant to give a gift to the next person in the shuffled list
+                                for i in 0..participants_cnt {
+                                    participants_shuffled[i].1 = participants_shuffled[(i + 1) % participants_cnt].0;
+                                }
+
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("Event started successfully!")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+
+                                // Save the secret santas and send notifications to participants
+                                for participant in participants_shuffled {
+                                    sqlx::query!("UPDATE event_participants SET assignee_id = ? WHERE user_id = ?", participant.1, participant.0)
+                                    .execute(&self.database).await.expect("Failed to update assingees");
+
+                                    let user = serenity::all::UserId::from(participant.0 as u64);
+                                    let assignee_user = serenity::all::UserId::from(participant.1 as u64).to_user(&ctx.http).await.expect("Failed to fetch user");
+                                    user.direct_message(&ctx.http, CreateMessage::new()
+                                        .content(format!("The Secret Santa Event **{}** has started!\n{}\nYou are expected to give a gift to **{}**\nUse the command `\\ss info {}` to check the event's status.",
+                                            event.name,
+                                            event.description.as_deref().unwrap_or(""),
+                                            assignee_user.display_name(),
+                                            event.id
+                                        ))
+                                    ).await.expect("Failed to send notification dm");
+                                }
+                            } else {
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("Secret Santa requires more than one participant")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+                            }
+                        } else {
+                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Event not found")
+                                    .ephemeral(true)
+                            )).await.expect("Failed to send message");
+                        }
+                    }
+                },
+                c if c.contains(Strings::COMP_SS_BTN_END_ID) => {
+                    if let Some(evt_id_str) = c.splitn(8, ":").last()
+                    && let Ok(evt_id) = evt_id_str.parse::<i64>() {
+                        // Confirm requesting user is host
+                        let user_id = i64::from(component.user.id);
+
+                        if let Ok(event) = sqlx::query!("SELECT * FROM events WHERE id = ?", evt_id)
+                            .fetch_one(&self.database).await {
+
+                            if event.host_id != user_id {
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("You are not the host of this event")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+                                return;
+                            }
+
+                            // Confrim that event's status is running
+                            let current_status = SSState::from(event.status as i32);
+                            if current_status != SSState::Running {
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("Event is not currently running")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+                                return;
+                            }
+
+                            // Change event status to finished
+                            let finished_status = i32::from(SSState::Finished);
+                            sqlx::query!("UPDATE events SET status = ? WHERE id = ?", finished_status, evt_id)
+                                .execute(&self.database).await.expect("Failed to update event status");
+
+                            // Notify each participant that event has finished
+                            let participants = sqlx::query!(
+                                "SELECT user_id FROM event_participants WHERE event_id = ? AND joined = TRUE",
+                                evt_id
+                            ).fetch_all(&self.database).await.expect("Failed to fetch participants");
+
+                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Event ended successfully!")
+                                    .ephemeral(true)
+                            )).await.expect("Failed to send message");
+
+                            // Send notifications to participants
+                            for participant in participants {
+                                let user = serenity::all::UserId::from(participant.user_id as u64);
+                                if let Err(why) = user.direct_message(&ctx.http, CreateMessage::new()
+                                    .content(format!("The Secret Santa Event '{}' has concluded successfully!\n{}",
+                                        event.name,
+                                        event.description.as_deref().unwrap_or("")
+                                    ))
+                                ).await {
+                                    println!("End notification error {}", why);
+                                }
+                            }
+                        } else {
+                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Event not found")
+                                    .ephemeral(true)
+                            )).await.expect("Failed to send message");
+                        }
+                    }
+                },
+                c if c.contains(Strings::COMP_SS_BTN_CANCEL_ID) => {
+                    if let Some(evt_id_str) = c.splitn(8, ":").last()
+                    && let Ok(evt_id) = evt_id_str.parse::<i64>() {
+                        // Confirm requesting user is host
+                        let user_id = i64::from(component.user.id);
+
+                        if let Ok(event) = sqlx::query!("SELECT * FROM events WHERE id = ?", evt_id)
+                            .fetch_one(&self.database).await {
+
+                            if event.host_id != user_id {
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("You are not the host of this event")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+                                return;
+                            }
+
+                            // Confrim that event's status is preparing or running
+                            let current_status = SSState::from(event.status as i32);
+                            let was_running = matches!(current_status, SSState::Running);
+                            if !matches!(current_status, SSState::PreRun | SSState::Running) {
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("Event cannot be canceled (already finished)")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+                                return;
+                            }
+
+                            // Change event status to finished
+                            let finished_status = i32::from(SSState::Finished);
+                            sqlx::query!("UPDATE events SET status = ? WHERE id = ?", finished_status, evt_id)
+                                .execute(&self.database).await.expect("Failed to update event status");
+
+                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Event canceled successfully!")
+                                    .ephemeral(true)
+                            )).await.expect("Failed to send message");
+
+                            // If it was running, notify each participant that event is now canceled with the event's name and description
+                            if was_running {
+                                let participants = sqlx::query!(
+                                    "SELECT user_id FROM event_participants WHERE event_id = ? AND joined = TRUE",
+                                    evt_id
+                                ).fetch_all(&self.database).await.expect("Failed to fetch participants");
+
+                                // Send notifications to participants
+                                for participant in participants {
+                                    let user = serenity::all::UserId::from(participant.user_id as u64);
+                                    user.direct_message(&ctx.http, CreateMessage::new()
+                                        .content(format!("The Secret Santa Event '{}' has been canceled by the host.\n{}",
+                                            event.name,
+                                            event.description.as_deref().unwrap_or("")
+                                        ))
+                                    ).await.expect("Failed to send notification dm");
+                                }
+                            }
+                        } else {
+                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Event not found")
+                                    .ephemeral(true)
+                            )).await.expect("Failed to send message");
+                        }
+                    }
+                },
+                c if c.contains(Strings::COMP_SS_BTN_LEAVE_ID) => {
+                    if let Some(evt_id_str) = c.splitn(8, ":").last()
+                    && let Ok(evt_id) = evt_id_str.parse::<i64>() {
+                        // Confirm requesting user is a participant in the event
+                        let user_id = i64::from(component.user.id);
+
+                        // Check if user is a participant and get event info
+                        let participant_query = sqlx::query!(
+                            "SELECT ep.*, e.name, e.description, e.status FROM event_participants ep
+                             JOIN events e ON ep.event_id = e.id
+                             WHERE ep.event_id = ? AND ep.user_id = ?",
+                            evt_id, user_id
+                        ).fetch_optional(&self.database).await.expect("Failed to fetch participant");
+
+                        if let Some(participant) = participant_query {
+                            // Confrim that event's status is preparing or running
+                            let current_status = SSState::from(participant.status as i32);
+                            if !matches!(current_status, SSState::PreRun | SSState::Running) {
+                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                    CreateInteractionResponseMessage::new()
+                                        .content("Cannot leave event (already finished)")
+                                        .ephemeral(true)
+                                )).await.expect("Failed to send message");
+                                return;
+                            }
+
+                            if current_status == SSState::Running {
+                                // Get participant's assignee
+                                if let Some(assignee_query) = sqlx::query!(
+                                    "SELECT assignee_id FROM event_participants WHERE event_id = ? AND user_id = ?",
+                                    evt_id, user_id
+                                ).fetch_optional(&self.database).await.expect("Failed to get removeal participant's assignee") {
+                                    // Update participant assigned to this participant
+                                    if let Some(removed_participants_santa) = sqlx::query!(
+                                        "SELECT user_id FROM event_participants WHERE event_id = ? AND assignee_id = ?",
+                                        evt_id, user_id
+                                    ).fetch_optional(&self.database).await.expect("Failed to get removeal participant's assignee"){
+                                        sqlx::query!("UPDATE event_participants SET assignee_id = ? WHERE event_id = ? AND user_id = ?", 
+                                            assignee_query.assignee_id, evt_id, removed_participants_santa.user_id
+                                        ).execute(&self.database).await.expect("Failed to update assignee");
+                                        // Message user of new assignment
+                                        let assignee_user = serenity::all::UserId::from(assignee_query.assignee_id.unwrap() as u64).to_user(&ctx.http).await.expect("Failed to fetch info on assignee");
+                                        let previous_santa = serenity::all::UserId::from(removed_participants_santa.user_id as u64).to_user(&ctx.http).await.expect("Failed to fetch info on previous santa");
+                                        previous_santa.direct_message(&ctx.http, CreateMessage::new()
+                                            .content(format!("The user **{}** has left the Secret Santa Event **{}**.\nYou have been reassigned to get a gift for **{}**",
+                                                component.user.display_name(),
+                                                participant.name,
+                                                assignee_user.display_name()
+                                            ))
+                                        ).await.expect("Failed to send notification dm");
+                                    }
+                                }
+                            }
+
+                            // Remove participant
+                            sqlx::query!(
+                                "DELETE FROM event_participants WHERE event_id = ? AND user_id = ?",
+                                evt_id, user_id
+                            ).execute(&self.database).await.expect("Failed to remove participant");
+
+                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content(format!("You have left the event '{}'", participant.name))
+                                    .ephemeral(true)
+                            )).await.expect("Failed to send message");
+                        } else {
+                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("You are not a participant in this event")
+                                    .ephemeral(true)
+                            )).await.expect("Failed to send message");
+                        }
+                    }
+                },
                 c => { println!("Unreconnized component interaction {}", c) }
             }
             _ => {}
@@ -638,7 +1003,7 @@ impl EventHandler for Bot {
                     Strings::CMD_SS_LIST_NAME,
                     Strings::CMD_SS_LIST_DESC,
                 ))
-                .add_option(
+                /*.add_option(
                     CreateCommandOption::new(
                         CommandOptionType::SubCommand,
                         Strings::CMD_SS_WISH_NAME,
@@ -649,7 +1014,7 @@ impl EventHandler for Bot {
                         Strings::OPT_SS_EVT_ID_NAME,
                         Strings::OPT_SS_EVT_ID_DESC,
                     )),
-                ),
+                )*/,
         );
 
         for cmd in cmds {
