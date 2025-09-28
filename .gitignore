@@ -30,3 +30,5 @@ target
 database.sqlite
 .env
 sqlite
+install.ps1
+bundle.tar.gz
