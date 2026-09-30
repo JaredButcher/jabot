@@ -1,11 +1,9 @@
 use serenity::all::{
-    Action, ActionRowComponent, Command, CommandOptionType, CreateActionRow, CreateCommand, CreateCommandOption, CreateInputText, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, CreateModal, InputTextStyle, Interaction
+    ActionRowComponent, Command, CommandOptionType, CreateActionRow, CreateCommand, CreateCommandOption, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, CreateModal, InputTextStyle, Interaction
 };
-use serenity::{async_trait, cache};
-use serenity::model::channel::Message;
+use serenity::async_trait;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
-use sqlx::database;
 use std::env;
 use std::fs;
 use rand::seq::SliceRandom;
@@ -63,24 +61,10 @@ impl Bot {
 
         Ok(())
     }
-
-    async fn user_join_event(&self, user: i64, event: i64) -> Result<(), Box<dyn std::error::Error>> {
-        sqlx::query!(
-            "UPDATE event_participants SET joined = TRUE WHERE user_id = ? and event_id = ?",
-            user, event
-        )
-        .execute(&self.database)
-        .await?;
-
-        Ok(())
-    }
 }
 
 #[async_trait]
 impl EventHandler for Bot {
-    async fn message(&self, ctx: Context, msg: Message) {
-    }
-
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         match interaction {
             Interaction::Command(command) => {
@@ -169,7 +153,7 @@ impl EventHandler for Bot {
 
                                         // Check if user is a participant and get event info
                                         let event_query = sqlx::query!(
-                                            "SELECT e.*, ep.joined FROM events e
+                                            "SELECT e.* FROM events e
                                              JOIN event_participants ep ON e.id = ep.event_id
                                              WHERE e.id = ? AND ep.user_id = ?",
                                             evt_id, user_id
@@ -177,7 +161,7 @@ impl EventHandler for Bot {
 
                                         // Fetch all event users
                                         let event_users_query = sqlx::query!(
-                                            "SELECT ep.user_id, ep.joined, ep.assignee_id FROM events e
+                                            "SELECT ep.user_id, ep.assignee_id FROM events e
                                              JOIN event_participants ep ON e.id = ep.event_id
                                              WHERE e.id = ?", evt_id
                                         ).fetch_all(&self.database).await.expect("Failed to fetch event users");
@@ -230,17 +214,6 @@ impl EventHandler for Bot {
                                                         },
                                                         SSState::Finished => {}
                                                     }
-                                                    if buttons.len() > 0 {
-                                                        components.push(CreateActionRow::Buttons(buttons));
-                                                    }
-                                                } else {
-                                                    // Participant view components
-                                                    let mut buttons = vec![];
-
-                                                    /*buttons.push(serenity::all::CreateButton::new(format!("{}:{}", Strings::COMP_SS_BTN_LEAVE_ID, evt_id.to_string()))
-                                                        .label("Leave Event")
-                                                        .style(serenity::all::ButtonStyle::Danger));*/
-
                                                     if buttons.len() > 0 {
                                                         components.push(CreateActionRow::Buttons(buttons));
                                                     }
@@ -323,30 +296,6 @@ impl EventHandler for Bot {
                                         serenity::builder::CreateInteractionResponseMessage::new().content(result_str)
                                         .ephemeral(true)
                                     )
-                                },
-                                Strings::CMD_SS_JOIN_NAME => {
-                                    if let Some(evt_id_opt) = command.data.options.get(0) && let Some(evt_id) = evt_id_opt.value.as_i64() {
-                                        match self.user_join_event(i64::from(command.user.id), evt_id).await {
-                                            Ok(_) => {
-                                                CreateInteractionResponse::Message(
-                                                    serenity::builder::CreateInteractionResponseMessage::new().content("Joined Event")
-                                                    .ephemeral(true)
-                                                )
-                                            },
-                                            Err(err) => {
-                                                println!("Failed to join event {}", err);
-                                                CreateInteractionResponse::Message(
-                                                    serenity::builder::CreateInteractionResponseMessage::new().content("Failed to join event")
-                                                    .ephemeral(true)
-                                                )
-                                            }
-                                        }
-                                    } else {
-                                        CreateInteractionResponse::Message(
-                                            serenity::builder::CreateInteractionResponseMessage::new().content("Missing argument")
-                                            .ephemeral(true)
-                                        )
-                                    }
                                 },
                                 _ => {
                                     println!("Unreconnized command {}", cmd_name_opt.name);
@@ -581,7 +530,7 @@ impl EventHandler for Bot {
 
                             // Fetch all event users
                             let event_users_query = sqlx::query!(
-                                "SELECT ep.user_id, ep.joined FROM events e
+                                "SELECT ep.user_id FROM events e
                                     JOIN event_participants ep ON e.id = ep.event_id
                                     WHERE e.id = ?", evt_id
                             ).fetch_all(&self.database).await.expect("Failed to fetch event users");
@@ -692,7 +641,7 @@ impl EventHandler for Bot {
 
                             // Notify each participant that event is now running with the event's name and description
                             let participants = sqlx::query!(
-                                "SELECT user_id, event_wish FROM event_participants WHERE event_id = ? AND joined = TRUE",
+                                "SELECT user_id, event_wish FROM event_participants WHERE event_id = ?",
                                 evt_id
                             ).fetch_all(&self.database).await.expect("Failed to fetch participants");
 
@@ -786,7 +735,7 @@ impl EventHandler for Bot {
 
                             // Notify each participant that event has finished
                             let participants = sqlx::query!(
-                                "SELECT user_id FROM event_participants WHERE event_id = ? AND joined = TRUE",
+                                "SELECT user_id FROM event_participants WHERE event_id = ?",
                                 evt_id
                             ).fetch_all(&self.database).await.expect("Failed to fetch participants");
 
@@ -861,7 +810,7 @@ impl EventHandler for Bot {
                             // If it was running, notify each participant that event is now canceled with the event's name and description
                             if was_running {
                                 let participants = sqlx::query!(
-                                    "SELECT user_id FROM event_participants WHERE event_id = ? AND joined = TRUE",
+                                    "SELECT user_id FROM event_participants WHERE event_id = ?",
                                     evt_id
                                 ).fetch_all(&self.database).await.expect("Failed to fetch participants");
 
@@ -880,80 +829,6 @@ impl EventHandler for Bot {
                             component.create_response(&ctx.http, CreateInteractionResponse::Message(
                                 CreateInteractionResponseMessage::new()
                                     .content("Event not found")
-                                    .ephemeral(true)
-                            )).await.expect("Failed to send message");
-                        }
-                    }
-                },
-                c if c.contains(Strings::COMP_SS_BTN_LEAVE_ID) => {
-                    if let Some(evt_id_str) = c.splitn(8, ":").last()
-                    && let Ok(evt_id) = evt_id_str.parse::<i64>() {
-                        // Confirm requesting user is a participant in the event
-                        let user_id = i64::from(component.user.id);
-
-                        // Check if user is a participant and get event info
-                        let participant_query = sqlx::query!(
-                            "SELECT ep.*, e.name, e.description, e.status FROM event_participants ep
-                             JOIN events e ON ep.event_id = e.id
-                             WHERE ep.event_id = ? AND ep.user_id = ?",
-                            evt_id, user_id
-                        ).fetch_optional(&self.database).await.expect("Failed to fetch participant");
-
-                        if let Some(participant) = participant_query {
-                            // Confrim that event's status is preparing or running
-                            let current_status = SSState::from(participant.status as i32);
-                            if !matches!(current_status, SSState::PreRun | SSState::Running) {
-                                component.create_response(&ctx.http, CreateInteractionResponse::Message(
-                                    CreateInteractionResponseMessage::new()
-                                        .content("Cannot leave event (already finished)")
-                                        .ephemeral(true)
-                                )).await.expect("Failed to send message");
-                                return;
-                            }
-
-                            if current_status == SSState::Running {
-                                // Get participant's assignee
-                                if let Some(assignee_query) = sqlx::query!(
-                                    "SELECT assignee_id FROM event_participants WHERE event_id = ? AND user_id = ?",
-                                    evt_id, user_id
-                                ).fetch_optional(&self.database).await.expect("Failed to get removeal participant's assignee") {
-                                    // Update participant assigned to this participant
-                                    if let Some(removed_participants_santa) = sqlx::query!(
-                                        "SELECT user_id FROM event_participants WHERE event_id = ? AND assignee_id = ?",
-                                        evt_id, user_id
-                                    ).fetch_optional(&self.database).await.expect("Failed to get removeal participant's assignee"){
-                                        sqlx::query!("UPDATE event_participants SET assignee_id = ? WHERE event_id = ? AND user_id = ?", 
-                                            assignee_query.assignee_id, evt_id, removed_participants_santa.user_id
-                                        ).execute(&self.database).await.expect("Failed to update assignee");
-                                        // Message user of new assignment
-                                        let assignee_user = serenity::all::UserId::from(assignee_query.assignee_id.unwrap() as u64).to_user(&ctx.http).await.expect("Failed to fetch info on assignee");
-                                        let previous_santa = serenity::all::UserId::from(removed_participants_santa.user_id as u64).to_user(&ctx.http).await.expect("Failed to fetch info on previous santa");
-                                        previous_santa.direct_message(&ctx.http, CreateMessage::new()
-                                            .content(format!("The user **{}** has left the Secret Santa Event **{}**.\nYou have been reassigned to get a gift for **{}**",
-                                                component.user.display_name(),
-                                                participant.name,
-                                                assignee_user.display_name()
-                                            ))
-                                        ).await.expect("Failed to send notification dm");
-                                    }
-                                }
-                            }
-
-                            // Remove participant
-                            sqlx::query!(
-                                "DELETE FROM event_participants WHERE event_id = ? AND user_id = ?",
-                                evt_id, user_id
-                            ).execute(&self.database).await.expect("Failed to remove participant");
-
-                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .content(format!("You have left the event '{}'", participant.name))
-                                    .ephemeral(true)
-                            )).await.expect("Failed to send message");
-                        } else {
-                            component.create_response(&ctx.http, CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .content("You are not a participant in this event")
                                     .ephemeral(true)
                             )).await.expect("Failed to send message");
                         }
@@ -1005,19 +880,7 @@ impl EventHandler for Bot {
                     CommandOptionType::SubCommand,
                     Strings::CMD_SS_LIST_NAME,
                     Strings::CMD_SS_LIST_DESC,
-                ))
-                /*.add_option(
-                    CreateCommandOption::new(
-                        CommandOptionType::SubCommand,
-                        Strings::CMD_SS_WISH_NAME,
-                        Strings::CMD_SS_WISH_DESC,
-                    )
-                    .add_sub_option(CreateCommandOption::new(
-                        CommandOptionType::Integer,
-                        Strings::OPT_SS_EVT_ID_NAME,
-                        Strings::OPT_SS_EVT_ID_DESC,
-                    )),
-                )*/,
+                )),
         );
 
         for cmd in cmds {
@@ -1027,13 +890,6 @@ impl EventHandler for Bot {
         }
     }
 }
-
-/*
-impl Handler {
-    async fn interaction_echo_handler(&self, ctx: &Context, interaction: &Interaction, command: &CommandInteraction){
-
-    }
-}*/
 
 fn get_discord_token() -> Result<String, Box<dyn std::error::Error>> {
     // Check for DISCORD_TOKEN_FILE environment variable
@@ -1077,9 +933,8 @@ async fn main() {
 
     let token = get_discord_token().expect("Failed to get Discord token");
 
-    let intents = GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::DIRECT_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
+    // Interactions (commands, components, modals) arrive without any gateway intents.
+    let intents = GatewayIntents::empty();
 
     let database_url = std::env::var("DATABASE_URL").expect("Database url not in enviroment");
     let database = sqlx::sqlite::SqlitePoolOptions::new()
