@@ -8,10 +8,8 @@ use serenity::all::{
 
 use super::custom_id::SsId;
 use super::model::{Event, EventId, EventStatus, Participant};
+use super::rules::MAX_PARTICIPANTS;
 use super::text;
-
-/// Discord's limit on values in one select menu.
-pub const MAX_SELECT_USERS: u8 = 25;
 
 pub fn ephemeral(content: impl Into<String>) -> CreateInteractionResponse {
     CreateInteractionResponse::Message(
@@ -126,7 +124,7 @@ fn host_controls(event: &Event, participants: &[Participant]) -> Vec<CreateActio
                 },
             )
             .placeholder("Add users to event...")
-            .max_values(MAX_SELECT_USERS),
+            .max_values(MAX_PARTICIPANTS as u8),
         ));
     }
 

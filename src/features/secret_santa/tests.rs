@@ -400,6 +400,27 @@ async fn picker_for_missing_event_is_refused() {
     assert_refused(result, text::EVENT_NOT_FOUND);
 }
 
+/// B4: the host stays in the event even if they deselect themselves.
+#[tokio::test]
+async fn picker_never_removes_the_host() {
+    let mut repo = repo_with(event(EventStatus::PreRun), &[1, 2]);
+    repo.expect_set_participants()
+        .withf(|_, add, remove| add.is_empty() && remove == [user(2)])
+        .times(1)
+        .returning(|_, _, _| Ok(()));
+    let mut responder = MockResponder::new();
+    responder.expect_respond().returning(|_| Ok(()));
+    let ss = santa(repo);
+
+    let ctx = ctx(responder, MockDiscordApi::new(), any_users());
+    ss.on_component(
+        &ctx,
+        ComponentRequest::user_select(host(), "ss:participants:5", vec![]),
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn picker_is_locked_after_start() {
     let mut repo = repo_with(event(EventStatus::Running), &[1, 2]);

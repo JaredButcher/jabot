@@ -34,6 +34,8 @@ pub const ALREADY_STARTED: &str = "Event was already started";
 pub const EVENT_CHANGED: &str = "The event changed in the meantime. Please try again.";
 pub const PARTICIPANTS_LOCKED: &str = "Cannot modify users of started event";
 pub const NOT_ENOUGH_PARTICIPANTS: &str = "Secret Santa requires more than one participant";
+pub const TOO_MANY_PARTICIPANTS: &str =
+    "An event can have at most 25 participants, including the host";
 pub const STARTED: &str = "Event started successfully!";
 pub const ENDED: &str = "Event ended successfully!";
 pub const CANCELED: &str = "Event canceled successfully!";

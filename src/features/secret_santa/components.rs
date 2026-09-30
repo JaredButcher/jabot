@@ -32,7 +32,7 @@ pub async fn set_participants(
         .iter()
         .map(|p| p.user)
         .collect();
-    let (add, remove) = rules::participant_diff(&existing, selected);
+    let (add, remove) = rules::participant_diff(&existing, selected, event.host)?;
     tracing::info!(event = %id, ?add, ?remove, "updating participants");
 
     ctx.users.ensure(&add).await?;

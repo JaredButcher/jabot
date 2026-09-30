@@ -102,6 +102,8 @@ pub enum SsError {
     ParticipantsLocked,
     #[error("{}", text::NOT_ENOUGH_PARTICIPANTS)]
     NotEnoughParticipants,
+    #[error("{}", text::TOO_MANY_PARTICIPANTS)]
+    TooManyParticipants,
     /// Lost a race with another start (e.g. a double click).
     #[error("{}", text::ALREADY_STARTED)]
     AlreadyStarted,

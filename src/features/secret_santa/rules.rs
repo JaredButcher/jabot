@@ -62,10 +62,23 @@ pub fn assign_santas(
         .collect())
 }
 
-/// Changes that turn `existing` participants into `selected`: `(add, remove)`.
-pub fn participant_diff(existing: &[UserId], selected: &[UserId]) -> (Vec<UserId>, Vec<UserId>) {
+/// Most participants an event can have: the host's picker can only show this many.
+pub const MAX_PARTICIPANTS: usize = 25;
+
+/// Changes that turn `existing` participants into `selected`: `(add, remove)`. The host is
+/// always kept, and the result may not exceed [`MAX_PARTICIPANTS`].
+pub fn participant_diff(
+    existing: &[UserId],
+    selected: &[UserId],
+    host: UserId,
+) -> Result<(Vec<UserId>, Vec<UserId>), SsError> {
     let existing_set: HashSet<UserId> = existing.iter().copied().collect();
-    let selected_set: HashSet<UserId> = selected.iter().copied().collect();
+    let mut keep: HashSet<UserId> = selected.iter().copied().collect();
+    keep.insert(host);
+    if keep.len() > MAX_PARTICIPANTS {
+        return Err(SsError::TooManyParticipants);
+    }
+
     let add = selected
         .iter()
         .copied()
@@ -74,9 +87,9 @@ pub fn participant_diff(existing: &[UserId], selected: &[UserId]) -> (Vec<UserId
     let remove = existing
         .iter()
         .copied()
-        .filter(|user| !selected_set.contains(user))
+        .filter(|user| !keep.contains(user))
         .collect();
-    (add, remove)
+    Ok((add, remove))
 }
 
 #[cfg(test)]
@@ -179,9 +192,29 @@ mod tests {
 
     #[test]
     fn diff_adds_new_and_removes_unselected() {
-        let (add, remove) = participant_diff(&users(&[1, 2, 3]), &users(&[1, 3, 4]));
+        let (add, remove) =
+            participant_diff(&users(&[1, 2, 3]), &users(&[1, 3, 4]), user(1)).unwrap();
 
         assert_eq!(add, users(&[4]));
         assert_eq!(remove, users(&[2]));
+    }
+
+    /// B4: deselecting the host doesn't remove them.
+    #[test]
+    fn diff_keeps_the_host() {
+        let (add, remove) = participant_diff(&users(&[1, 2]), &users(&[2, 3]), user(1)).unwrap();
+
+        assert_eq!(add, users(&[3]));
+        assert!(remove.is_empty());
+    }
+
+    /// B4: the picker shows at most 25 users, so an event can't grow past that.
+    #[test]
+    fn diff_refuses_more_than_the_picker_can_show() {
+        let others: Vec<UserId> = (2..=26).map(user).collect();
+
+        let result = participant_diff(&users(&[1]), &others, user(1));
+
+        assert!(matches!(result, Err(SsError::TooManyParticipants)));
     }
 }
