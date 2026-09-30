@@ -1,7 +1,8 @@
 use std::env;
 use std::fs;
+use std::sync::Arc;
 
-use jabot::features::secret_santa::SecretSanta;
+use jabot::features::secret_santa::{SecretSanta, SqliteSecretSantaRepo};
 use jabot::framework::FeatureRegistry;
 use serenity::all::{Command, Interaction};
 use serenity::async_trait;
@@ -79,7 +80,9 @@ async fn main() {
     let pool = connect_database().await;
 
     let registry = FeatureRegistry::builder()
-        .register(SecretSanta::new(pool.clone()))
+        .register(SecretSanta::new(Arc::new(SqliteSecretSantaRepo::new(
+            pool.clone(),
+        ))))
         .build()
         .expect("Feature registration conflict");
 
