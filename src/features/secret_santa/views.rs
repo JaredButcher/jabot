@@ -2,8 +2,8 @@
 
 use serenity::all::{
     ButtonStyle, CreateActionRow, CreateButton, CreateInputText, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateModal, CreateSelectMenu, CreateSelectMenuKind,
-    InputTextStyle, UserId,
+    CreateInteractionResponseFollowup, CreateInteractionResponseMessage, CreateModal,
+    CreateSelectMenu, CreateSelectMenuKind, InputTextStyle, UserId,
 };
 
 use super::custom_id::SsId;
@@ -171,6 +171,17 @@ pub fn event_list(events: &[(Event, String)]) -> CreateInteractionResponse {
         );
     }
     ephemeral(content)
+}
+
+/// Tells the host which participants couldn't be DMed.
+pub fn dm_failures(users: &[UserId]) -> CreateInteractionResponseFollowup {
+    let mentions: Vec<String> = users.iter().map(|u| format!("<@{u}>")).collect();
+    CreateInteractionResponseFollowup::new()
+        .content(format!(
+            "Couldn't DM: {} (they may have DMs disabled)",
+            mentions.join(", ")
+        ))
+        .ephemeral(true)
 }
 
 pub fn invite_dm(event: &Event) -> String {

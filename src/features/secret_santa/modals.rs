@@ -2,7 +2,7 @@
 
 use super::model::{EventId, SsError};
 use super::{SecretSanta, respond, rules, text, views};
-use crate::framework::{FeatureError, InteractionCtx, ModalRequest};
+use crate::framework::{InteractionCtx, ModalRequest};
 
 /// Most unfinished events one host may have at a time.
 pub const HOST_EVENT_LIMIT: i64 = 32;
@@ -11,7 +11,7 @@ pub async fn create(
     ss: &SecretSanta,
     ctx: &InteractionCtx,
     req: &ModalRequest,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let name = req.field(text::FIELD_NAME).unwrap_or(text::DEFAULT_NAME);
     let description = req
         .field(text::FIELD_DESCRIPTION)
@@ -29,7 +29,7 @@ pub async fn edit(
     ctx: &InteractionCtx,
     id: EventId,
     req: &ModalRequest,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let event = ss.repo.get_event(id).await?.ok_or(SsError::EventNotFound)?;
     rules::ensure_host(&event, req.user)?;
 

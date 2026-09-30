@@ -4,7 +4,7 @@ use serenity::all::{CommandOptionType, CreateCommand, CreateCommandOption, Inter
 
 use super::model::{EventId, SsError};
 use super::{SecretSanta, respond, rules, text, views};
-use crate::framework::{CommandRequest, FeatureError, InteractionCtx};
+use crate::framework::{CommandRequest, InteractionCtx};
 
 pub fn ss_command() -> CreateCommand {
     let event_id = || {
@@ -49,7 +49,7 @@ pub async fn create(
     ss: &SecretSanta,
     ctx: &InteractionCtx,
     req: &CommandRequest,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let Some(id) = req.options.i64(text::OPT_EVENT_ID) else {
         return respond(ctx, views::create_form()).await;
     };
@@ -66,7 +66,7 @@ pub async fn info(
     ss: &SecretSanta,
     ctx: &InteractionCtx,
     req: &CommandRequest,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let id = EventId(
         req.options
             .i64(text::OPT_EVENT_ID)
@@ -79,7 +79,7 @@ pub async fn info(
         Some(event) if is_participant => {
             respond(ctx, views::event_info(&event, &participants, req.user)).await
         }
-        _ => Err(SsError::NotParticipant.into()),
+        _ => Err(SsError::NotParticipant),
     }
 }
 
@@ -87,7 +87,7 @@ pub async fn list(
     ss: &SecretSanta,
     ctx: &InteractionCtx,
     req: &CommandRequest,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let mut rows = vec![];
     for event in ss.repo.events_for_user(req.user).await? {
         let host_name = match ctx.discord.user_name(event.host).await {

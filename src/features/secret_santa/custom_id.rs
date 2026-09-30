@@ -25,12 +25,6 @@ pub enum SsId {
 #[error("unrecognized Secret Santa custom id {0:?}")]
 pub struct InvalidId(pub String);
 
-impl From<InvalidId> for crate::framework::FeatureError {
-    fn from(error: InvalidId) -> Self {
-        Self::internal(error)
-    }
-}
-
 impl fmt::Display for SsId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

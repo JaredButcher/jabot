@@ -2,8 +2,9 @@ use std::fmt;
 
 use serenity::all::UserId;
 
+use super::custom_id::{InvalidId, SsId};
 use super::text;
-use crate::framework::FeatureError;
+use crate::framework::{ComponentKind, FeatureError};
 
 /// Primary key of an `ss_events` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,7 +80,8 @@ pub struct Participant {
     pub assignee: Option<UserId>,
 }
 
-/// Why a Secret Santa action was refused. Each message is shown to the user as-is.
+/// Why a Secret Santa action failed. Refusals (the variants with a `text::` message) are shown
+/// to the user as-is; everything else is logged and the user sees a generic error.
 #[derive(Debug, thiserror::Error)]
 pub enum SsError {
     #[error("{}", text::EVENT_NOT_FOUND)]
@@ -106,11 +108,43 @@ pub enum SsError {
     /// The status changed between reading the event and updating it.
     #[error("{}", text::EVENT_CHANGED)]
     EventChanged,
+
+    #[error(transparent)]
+    Repo(#[from] sqlx::Error),
+    #[error(transparent)]
+    Discord(#[from] serenity::Error),
+    #[error(transparent)]
+    InvalidId(#[from] InvalidId),
+    #[error("{0:?} was routed to the wrong handler")]
+    UnexpectedId(SsId),
+    #[error("unknown /ss subcommand {0:?}")]
+    UnknownSubcommand(Option<String>),
+    #[error("participant picker sent {0:?}")]
+    UnexpectedComponent(ComponentKind),
+}
+
+impl SsError {
+    /// Whether this is a refusal meant for the user rather than a failure to log.
+    pub fn is_refusal(&self) -> bool {
+        !matches!(
+            self,
+            SsError::Repo(_)
+                | SsError::Discord(_)
+                | SsError::InvalidId(_)
+                | SsError::UnexpectedId(_)
+                | SsError::UnknownSubcommand(_)
+                | SsError::UnexpectedComponent(_)
+        )
+    }
 }
 
 impl From<SsError> for FeatureError {
     fn from(error: SsError) -> Self {
-        FeatureError::user(error.to_string())
+        if error.is_refusal() {
+            FeatureError::user(error.to_string())
+        } else {
+            FeatureError::internal(error)
+        }
     }
 }
 
@@ -130,5 +164,14 @@ mod tests {
         }
         assert_eq!(EventStatus::try_from(3), Err(InvalidStatus(3)));
         assert_eq!(EventStatus::try_from(-1), Err(InvalidStatus(-1)));
+    }
+
+    #[test]
+    fn refusals_reach_the_user_and_failures_do_not() {
+        let refusal = FeatureError::from(SsError::NotHost);
+        assert!(matches!(refusal, FeatureError::User(message) if message == text::NOT_HOST));
+
+        let failure = FeatureError::from(SsError::Repo(sqlx::Error::PoolTimedOut));
+        assert!(matches!(failure, FeatureError::Internal(_)));
     }
 }

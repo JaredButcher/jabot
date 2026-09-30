@@ -11,7 +11,7 @@ use serenity::all::UserId;
 use super::model::{Event, EventId, EventStatus, Participant};
 use super::repo::MockSecretSantaRepo;
 use super::{SecretSanta, components, text};
-use crate::framework::testing::{any_users, content, ctx, is_ephemeral, json};
+use crate::framework::testing::{any_users, content, ctx, followup_content, is_ephemeral, json};
 use crate::framework::{
     CommandRequest, ComponentRequest, Feature, FeatureError, InteractionCtx, MockDiscordApi,
     MockResponder, MockUserRepo, ModalRequest,
@@ -89,8 +89,8 @@ fn recording_discord() -> (MockDiscordApi, DmLog) {
 }
 
 /// The handler refused with this user-facing message (the registry shows it ephemerally).
-fn assert_refused(result: Result<(), FeatureError>, expected: &str) {
-    match result {
+fn assert_refused(result: Result<(), impl Into<FeatureError>>, expected: &str) {
+    match result.map_err(Into::into) {
         Err(FeatureError::User(message)) => assert_eq!(message, expected),
         other => panic!("expected refusal {expected:?}, got {other:?}"),
     }
@@ -260,6 +260,38 @@ async fn cancel_running_event_replies_then_dms_participants() {
     ss.on_component(&ctx, ComponentRequest::button(host(), "ss:cancel:5"))
         .await
         .unwrap();
+}
+
+/// B6: one participant with DMs closed doesn't stop the others being told, and the host
+/// hears who was missed.
+#[tokio::test]
+async fn failed_dm_is_reported_and_others_still_notified() {
+    let mut repo = repo_with(event(EventStatus::Running), &[1, 2, 3]);
+    repo.expect_transition().returning(|_, _, _| Ok(true));
+    let delivered = Arc::new(Mutex::new(vec![]));
+    let log = delivered.clone();
+    let mut discord = MockDiscordApi::new();
+    discord.expect_send_dm().times(3).returning(move |to, _| {
+        if to == user(2) {
+            return Err(serenity::Error::Other("Cannot send messages to this user"));
+        }
+        log.lock().unwrap().push(to);
+        Ok(())
+    });
+    let mut responder = replies(text::CANCELED);
+    responder
+        .expect_followup()
+        .withf(|f| followup_content(f).contains("Couldn't DM: <@2>"))
+        .times(1)
+        .returning(|_| Ok(()));
+    let ss = santa(repo);
+
+    let ctx = ctx(responder, discord, MockUserRepo::new());
+    ss.on_component(&ctx, ComponentRequest::button(host(), "ss:cancel:5"))
+        .await
+        .unwrap();
+
+    assert_eq!(*delivered.lock().unwrap(), [user(1), user(3)]);
 }
 
 #[tokio::test]

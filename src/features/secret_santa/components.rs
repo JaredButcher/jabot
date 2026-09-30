@@ -4,11 +4,11 @@ use rand::rngs::StdRng;
 use serenity::all::{CreateInteractionResponse, UserId};
 
 use super::model::{Event, EventId, EventStatus, SsError};
-use super::{SecretSanta, reply, respond, rules, text, views};
-use crate::framework::{ComponentKind, ComponentRequest, FeatureError, InteractionCtx};
+use super::{SecretSanta, notify, reply, respond, rules, text, views};
+use crate::framework::{ComponentKind, ComponentRequest, InteractionCtx};
 
-async fn load(ss: &SecretSanta, id: EventId) -> Result<Event, FeatureError> {
-    Ok(ss.repo.get_event(id).await?.ok_or(SsError::EventNotFound)?)
+async fn load(ss: &SecretSanta, id: EventId) -> Result<Event, SsError> {
+    ss.repo.get_event(id).await?.ok_or(SsError::EventNotFound)
 }
 
 /// The host's participant picker was submitted: make the participant list match it.
@@ -17,12 +17,9 @@ pub async fn set_participants(
     ctx: &InteractionCtx,
     id: EventId,
     req: &ComponentRequest,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let ComponentKind::UserSelect(selected) = &req.kind else {
-        return Err(FeatureError::internal(format!(
-            "participant picker sent {:?}",
-            req.kind
-        )));
+        return Err(SsError::UnexpectedComponent(req.kind.clone()));
     };
     let event = load(ss, id).await?;
     rules::ensure_participants_editable(&event)?;
@@ -35,16 +32,15 @@ pub async fn set_participants(
         .map(|p| p.user)
         .collect();
     let (add, remove) = rules::participant_diff(&existing, selected);
+    tracing::info!(event = %id, ?add, ?remove, "updating participants");
 
     ctx.users.ensure(&add).await?;
     ss.repo.set_participants(id, &add, &remove).await?;
     respond(ctx, CreateInteractionResponse::Acknowledge).await?;
 
     // Notify after acknowledging, so slow DMs can't time out the interaction.
-    for user in add {
-        ctx.discord.send_dm(user, views::invite_dm(&event)).await?;
-    }
-    Ok(())
+    let invite = views::invite_dm(&event);
+    notify(ctx, add.into_iter().map(|user| (user, invite.clone()))).await
 }
 
 /// Draw assignments and tell every participant who they give a gift to.
@@ -54,7 +50,7 @@ pub async fn start(
     id: EventId,
     user: UserId,
     rng: &mut StdRng,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let event = load(ss, id).await?;
     rules::ensure_host(&event, user)?;
     rules::ensure_can_start(&event)?;
@@ -69,16 +65,14 @@ pub async fn start(
 
     // Status and assignments are saved together before anyone is told anything.
     if !ss.repo.start_event(id, &assignments).await? {
-        return Err(SsError::AlreadyStarted.into());
+        return Err(SsError::AlreadyStarted);
     }
     reply(ctx, text::STARTED).await?;
 
-    for (santa, recipient) in assignments {
-        ctx.discord
-            .send_dm(santa, views::started_dm(&event, recipient))
-            .await?;
-    }
-    Ok(())
+    let dms = assignments
+        .into_iter()
+        .map(|(santa, recipient)| (santa, views::started_dm(&event, recipient)));
+    notify(ctx, dms).await
 }
 
 pub async fn end(
@@ -86,7 +80,7 @@ pub async fn end(
     ctx: &InteractionCtx,
     id: EventId,
     user: UserId,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let event = load(ss, id).await?;
     rules::ensure_host(&event, user)?;
     rules::ensure_can_end(&event)?;
@@ -95,21 +89,17 @@ pub async fn end(
         .transition(id, &[event.status], EventStatus::Finished)
         .await?
     {
-        return Err(SsError::EventChanged.into());
+        return Err(SsError::EventChanged);
     }
     let participants = ss.repo.participants(id).await?;
     reply(ctx, text::ENDED).await?;
 
-    for participant in participants {
-        if let Err(why) = ctx
-            .discord
-            .send_dm(participant.user, views::ended_dm(&event))
-            .await
-        {
-            println!("End notification error {}", why);
-        }
-    }
-    Ok(())
+    let ended = views::ended_dm(&event);
+    notify(
+        ctx,
+        participants.into_iter().map(|p| (p.user, ended.clone())),
+    )
+    .await
 }
 
 pub async fn cancel(
@@ -117,7 +107,7 @@ pub async fn cancel(
     ctx: &InteractionCtx,
     id: EventId,
     user: UserId,
-) -> Result<(), FeatureError> {
+) -> Result<(), SsError> {
     let event = load(ss, id).await?;
     rules::ensure_host(&event, user)?;
     rules::ensure_can_cancel(&event)?;
@@ -127,17 +117,19 @@ pub async fn cancel(
         .transition(id, &[event.status], EventStatus::Finished)
         .await?
     {
-        return Err(SsError::EventChanged.into());
+        return Err(SsError::EventChanged);
     }
     reply(ctx, text::CANCELED).await?;
 
     // Participants only know about their assignments once the event is running.
-    if event.status == EventStatus::Running {
-        for participant in ss.repo.participants(id).await? {
-            ctx.discord
-                .send_dm(participant.user, views::canceled_dm(&event))
-                .await?;
-        }
+    if event.status != EventStatus::Running {
+        return Ok(());
     }
-    Ok(())
+    let canceled = views::canceled_dm(&event);
+    let participants = ss.repo.participants(id).await?;
+    notify(
+        ctx,
+        participants.into_iter().map(|p| (p.user, canceled.clone())),
+    )
+    .await
 }
