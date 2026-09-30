@@ -13,8 +13,8 @@ use super::repo::MockSecretSantaRepo;
 use super::{SecretSanta, components, text};
 use crate::framework::testing::{any_users, content, ctx, is_ephemeral, json};
 use crate::framework::{
-    CommandRequest, ComponentRequest, Feature, InteractionCtx, MockDiscordApi, MockResponder,
-    MockUserRepo, ModalRequest,
+    CommandRequest, ComponentRequest, Feature, FeatureError, InteractionCtx, MockDiscordApi,
+    MockResponder, MockUserRepo, ModalRequest,
 };
 use serenity::all::CommandDataOptionValue;
 
@@ -88,6 +88,14 @@ fn recording_discord() -> (MockDiscordApi, DmLog) {
     (discord, sent)
 }
 
+/// The handler refused with this user-facing message (the registry shows it ephemerally).
+fn assert_refused(result: Result<(), FeatureError>, expected: &str) {
+    match result {
+        Err(FeatureError::User(message)) => assert_eq!(message, expected),
+        other => panic!("expected refusal {expected:?}, got {other:?}"),
+    }
+}
+
 fn plain_ctx(responder: MockResponder) -> InteractionCtx {
     ctx(responder, MockDiscordApi::new(), MockUserRepo::new())
 }
@@ -100,10 +108,11 @@ async fn start_rejects_non_host() {
     repo.expect_start_event().times(0);
     let ss = santa(repo);
 
-    let ctx = plain_ctx(replies(text::NOT_HOST));
-    ss.on_component(&ctx, ComponentRequest::button(user(2), "ss:start:5"))
-        .await
-        .unwrap();
+    let ctx = plain_ctx(MockResponder::new());
+    let result = ss
+        .on_component(&ctx, ComponentRequest::button(user(2), "ss:start:5"))
+        .await;
+    assert_refused(result, text::NOT_HOST);
 }
 
 #[tokio::test]
@@ -112,10 +121,11 @@ async fn start_requires_two_participants() {
     repo.expect_start_event().times(0);
     let ss = santa(repo);
 
-    let ctx = plain_ctx(replies(text::NOT_ENOUGH_PARTICIPANTS));
-    ss.on_component(&ctx, ComponentRequest::button(host(), "ss:start:5"))
-        .await
-        .unwrap();
+    let ctx = plain_ctx(MockResponder::new());
+    let result = ss
+        .on_component(&ctx, ComponentRequest::button(host(), "ss:start:5"))
+        .await;
+    assert_refused(result, text::NOT_ENOUGH_PARTICIPANTS);
 }
 
 #[tokio::test]
@@ -179,11 +189,10 @@ async fn start_already_started_sends_no_dms() {
     repo.expect_start_event().returning(|_, _| Ok(false));
     let ss = santa(repo);
 
-    let ctx = plain_ctx(replies(text::ALREADY_STARTED));
+    let ctx = plain_ctx(MockResponder::new());
     let mut rng = StdRng::seed_from_u64(1);
-    components::start(&ss, &ctx, EVENT, host(), &mut rng)
-        .await
-        .unwrap();
+    let result = components::start(&ss, &ctx, EVENT, host(), &mut rng).await;
+    assert_refused(result, text::ALREADY_STARTED);
 }
 
 // --- end / cancel ---
@@ -215,10 +224,11 @@ async fn end_requires_running_event() {
     repo.expect_transition().times(0);
     let ss = santa(repo);
 
-    let ctx = plain_ctx(replies(text::NOT_RUNNING));
-    ss.on_component(&ctx, ComponentRequest::button(host(), "ss:end:5"))
-        .await
-        .unwrap();
+    let ctx = plain_ctx(MockResponder::new());
+    let result = ss
+        .on_component(&ctx, ComponentRequest::button(host(), "ss:end:5"))
+        .await;
+    assert_refused(result, text::NOT_RUNNING);
 }
 
 #[tokio::test]
@@ -272,10 +282,11 @@ async fn cancel_finished_event_is_rejected() {
     repo.expect_transition().times(0);
     let ss = santa(repo);
 
-    let ctx = plain_ctx(replies(text::ALREADY_FINISHED));
-    ss.on_component(&ctx, ComponentRequest::button(host(), "ss:cancel:5"))
-        .await
-        .unwrap();
+    let ctx = plain_ctx(MockResponder::new());
+    let result = ss
+        .on_component(&ctx, ComponentRequest::button(host(), "ss:cancel:5"))
+        .await;
+    assert_refused(result, text::ALREADY_FINISHED);
 }
 
 // --- participant picker ---
@@ -328,13 +339,14 @@ async fn picker_is_locked_after_start() {
     repo.expect_set_participants().times(0);
     let ss = santa(repo);
 
-    let ctx = plain_ctx(replies(text::PARTICIPANTS_LOCKED));
-    ss.on_component(
-        &ctx,
-        ComponentRequest::user_select(host(), "ss:participants:5", vec![user(1)]),
-    )
-    .await
-    .unwrap();
+    let ctx = plain_ctx(MockResponder::new());
+    let result = ss
+        .on_component(
+            &ctx,
+            ComponentRequest::user_select(host(), "ss:participants:5", vec![user(1)]),
+        )
+        .await;
+    assert_refused(result, text::PARTICIPANTS_LOCKED);
 }
 
 // --- forms ---
@@ -390,9 +402,8 @@ async fn edit_form_by_non_host_changes_nothing() {
     let ss = santa(repo);
 
     let form = ModalRequest::new(user(2), "ss:edit:5", [(text::FIELD_NAME, "Mine now")]);
-    ss.on_modal(&plain_ctx(replies(text::NOT_HOST)), form)
-        .await
-        .unwrap();
+    let result = ss.on_modal(&plain_ctx(MockResponder::new()), form).await;
+    assert_refused(result, text::NOT_HOST);
 }
 
 #[tokio::test]
@@ -430,9 +441,8 @@ async fn info_requires_participation() {
 
     let req = ss_command(user(9), text::CMD_INFO)
         .option(text::OPT_EVENT_ID, CommandDataOptionValue::Integer(5));
-    ss.on_command(&plain_ctx(replies(text::NOT_PARTICIPANT)), req)
-        .await
-        .unwrap();
+    let result = ss.on_command(&plain_ctx(MockResponder::new()), req).await;
+    assert_refused(result, text::NOT_PARTICIPANT);
 }
 
 #[tokio::test]

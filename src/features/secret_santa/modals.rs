@@ -1,7 +1,7 @@
 //! Create and edit form submissions.
 
-use super::model::EventId;
-use super::{SecretSanta, reply, respond, text, views};
+use super::model::{EventId, SsError};
+use super::{SecretSanta, respond, rules, text, views};
 use crate::framework::{FeatureError, InteractionCtx, ModalRequest};
 
 /// Most unfinished events one host may have at a time.
@@ -30,12 +30,8 @@ pub async fn edit(
     id: EventId,
     req: &ModalRequest,
 ) -> Result<(), FeatureError> {
-    let Some(event) = ss.repo.get_event(id).await? else {
-        return reply(ctx, text::EVENT_NOT_FOUND).await;
-    };
-    if event.host != req.user {
-        return reply(ctx, text::NOT_HOST).await;
-    }
+    let event = ss.repo.get_event(id).await?.ok_or(SsError::EventNotFound)?;
+    rules::ensure_host(&event, req.user)?;
 
     let name = req.field(text::FIELD_NAME).unwrap_or(&event.name);
     let description = req

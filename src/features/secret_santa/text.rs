@@ -31,8 +31,7 @@ pub const NOT_PREPARING: &str = "Event is not in preparing state";
 pub const NOT_RUNNING: &str = "Event is not currently running";
 pub const ALREADY_FINISHED: &str = "Event cannot be canceled (already finished)";
 pub const ALREADY_STARTED: &str = "Event was already started";
-pub const CHANGED_WHILE_CANCELING: &str =
-    "The event changed while you were canceling it. Please try again.";
+pub const EVENT_CHANGED: &str = "The event changed in the meantime. Please try again.";
 pub const PARTICIPANTS_LOCKED: &str = "Cannot modify users of started event";
 pub const NOT_ENOUGH_PARTICIPANTS: &str = "Secret Santa requires more than one participant";
 pub const STARTED: &str = "Event started successfully!";

@@ -1,14 +1,15 @@
 //! Host controls from the `/ss info` view: participant picker and start/end/cancel buttons.
 
-use std::collections::HashSet;
-
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
 use serenity::all::{CreateInteractionResponse, UserId};
 
-use super::model::{EventId, EventStatus};
-use super::{SecretSanta, reply, respond, text, views};
+use super::model::{Event, EventId, EventStatus, SsError};
+use super::{SecretSanta, reply, respond, rules, text, views};
 use crate::framework::{ComponentKind, ComponentRequest, FeatureError, InteractionCtx};
+
+async fn load(ss: &SecretSanta, id: EventId) -> Result<Event, FeatureError> {
+    Ok(ss.repo.get_event(id).await?.ok_or(SsError::EventNotFound)?)
+}
 
 /// The host's participant picker was submitted: make the participant list match it.
 pub async fn set_participants(
@@ -23,33 +24,17 @@ pub async fn set_participants(
             req.kind
         )));
     };
-    let event = ss
-        .repo
-        .get_event(id)
-        .await?
-        .ok_or_else(|| FeatureError::internal(format!("event {id} not found")))?;
-    if event.status != EventStatus::PreRun {
-        return reply(ctx, text::PARTICIPANTS_LOCKED).await;
-    }
+    let event = load(ss, id).await?;
+    rules::ensure_participants_editable(&event)?;
 
-    let existing: HashSet<UserId> = ss
+    let existing: Vec<UserId> = ss
         .repo
         .participants(id)
         .await?
         .iter()
         .map(|p| p.user)
         .collect();
-    let selected_set: HashSet<UserId> = selected.iter().copied().collect();
-    let add: Vec<UserId> = selected
-        .iter()
-        .copied()
-        .filter(|user| !existing.contains(user))
-        .collect();
-    let remove: Vec<UserId> = existing
-        .iter()
-        .copied()
-        .filter(|user| !selected_set.contains(user))
-        .collect();
+    let (add, remove) = rules::participant_diff(&existing, selected);
 
     ctx.users.ensure(&add).await?;
     ss.repo.set_participants(id, &add, &remove).await?;
@@ -70,30 +55,21 @@ pub async fn start(
     user: UserId,
     rng: &mut StdRng,
 ) -> Result<(), FeatureError> {
-    let Some(event) = ss.repo.get_event(id).await? else {
-        return reply(ctx, text::EVENT_NOT_FOUND).await;
-    };
-    if event.host != user {
-        return reply(ctx, text::NOT_HOST).await;
-    }
-    if event.status != EventStatus::PreRun {
-        return reply(ctx, text::NOT_PREPARING).await;
-    }
-    let participants = ss.repo.participants(id).await?;
-    if participants.len() < 2 {
-        return reply(ctx, text::NOT_ENOUGH_PARTICIPANTS).await;
-    }
-
-    // Shuffle, then each participant gives to the next one in the list.
-    let mut shuffled: Vec<UserId> = participants.iter().map(|p| p.user).collect();
-    shuffled.shuffle(rng);
-    let assignments: Vec<(UserId, UserId)> = (0..shuffled.len())
-        .map(|i| (shuffled[i], shuffled[(i + 1) % shuffled.len()]))
+    let event = load(ss, id).await?;
+    rules::ensure_host(&event, user)?;
+    rules::ensure_can_start(&event)?;
+    let participants: Vec<UserId> = ss
+        .repo
+        .participants(id)
+        .await?
+        .iter()
+        .map(|p| p.user)
         .collect();
+    let assignments = rules::assign_santas(&participants, rng)?;
 
     // Status and assignments are saved together before anyone is told anything.
     if !ss.repo.start_event(id, &assignments).await? {
-        return reply(ctx, text::ALREADY_STARTED).await;
+        return Err(SsError::AlreadyStarted.into());
     }
     reply(ctx, text::STARTED).await?;
 
@@ -111,19 +87,15 @@ pub async fn end(
     id: EventId,
     user: UserId,
 ) -> Result<(), FeatureError> {
-    let Some(event) = ss.repo.get_event(id).await? else {
-        return reply(ctx, text::EVENT_NOT_FOUND).await;
-    };
-    if event.host != user {
-        return reply(ctx, text::NOT_HOST).await;
-    }
-    if event.status != EventStatus::Running
-        || !ss
-            .repo
-            .transition(id, &[EventStatus::Running], EventStatus::Finished)
-            .await?
+    let event = load(ss, id).await?;
+    rules::ensure_host(&event, user)?;
+    rules::ensure_can_end(&event)?;
+    if !ss
+        .repo
+        .transition(id, &[event.status], EventStatus::Finished)
+        .await?
     {
-        return reply(ctx, text::NOT_RUNNING).await;
+        return Err(SsError::EventChanged.into());
     }
     let participants = ss.repo.participants(id).await?;
     reply(ctx, text::ENDED).await?;
@@ -146,22 +118,16 @@ pub async fn cancel(
     id: EventId,
     user: UserId,
 ) -> Result<(), FeatureError> {
-    let Some(event) = ss.repo.get_event(id).await? else {
-        return reply(ctx, text::EVENT_NOT_FOUND).await;
-    };
-    if event.host != user {
-        return reply(ctx, text::NOT_HOST).await;
-    }
-    if event.status == EventStatus::Finished {
-        return reply(ctx, text::ALREADY_FINISHED).await;
-    }
+    let event = load(ss, id).await?;
+    rules::ensure_host(&event, user)?;
+    rules::ensure_can_cancel(&event)?;
     // Only from the status we just read, so we know whether assignments went out.
     if !ss
         .repo
         .transition(id, &[event.status], EventStatus::Finished)
         .await?
     {
-        return reply(ctx, text::CHANGED_WHILE_CANCELING).await;
+        return Err(SsError::EventChanged.into());
     }
     reply(ctx, text::CANCELED).await?;
 

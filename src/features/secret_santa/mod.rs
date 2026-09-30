@@ -6,6 +6,7 @@ mod custom_id;
 mod modals;
 mod model;
 mod repo;
+mod rules;
 #[cfg(test)]
 mod tests;
 mod text;
