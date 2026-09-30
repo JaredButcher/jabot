@@ -27,7 +27,9 @@ target
 
 # sqlx
 
-database.sqlite
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .env
 sqlite
 install.ps1
