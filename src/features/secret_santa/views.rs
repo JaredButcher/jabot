@@ -152,20 +152,20 @@ fn host_controls(event: &Event, participants: &[Participant]) -> Vec<CreateActio
     rows
 }
 
-/// The `/ss list` view, with each event's host display name.
-pub fn event_list(events: &[(Event, String)]) -> CreateInteractionResponse {
+/// The `/ss list` view. Hosts are mentions, which Discord renders as names without an API call.
+pub fn event_list(events: &[Event]) -> CreateInteractionResponse {
     if events.is_empty() {
         return ephemeral(text::NO_EVENTS);
     }
     let mut content = String::from("---Events---\n");
-    for (event, host_name) in events {
+    for event in events {
         content += &format!(
-            "**ID:** {}\n**Name:** {}\n**Description:** {}\n**Status:** {}\n**Host:** {}\n\n",
+            "**ID:** {}\n**Name:** {}\n**Description:** {}\n**Status:** {}\n**Host:** <@{}>\n\n",
             event.id,
             event.name,
             event.description.as_deref().unwrap_or_default(),
             event.status.label(),
-            host_name
+            event.host
         );
     }
     ephemeral(content)

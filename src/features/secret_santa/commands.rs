@@ -88,13 +88,6 @@ pub async fn list(
     ctx: &InteractionCtx,
     req: &CommandRequest,
 ) -> Result<(), SsError> {
-    let mut rows = vec![];
-    for event in ss.repo.events_for_user(req.user).await? {
-        let host_name = match ctx.discord.user_name(event.host).await {
-            Ok(name) => name,
-            Err(_) => format!("Unknown User ({})", event.host),
-        };
-        rows.push((event, host_name));
-    }
-    respond(ctx, views::event_list(&rows)).await
+    let events = ss.repo.events_for_user(req.user).await?;
+    respond(ctx, views::event_list(&events)).await
 }

@@ -564,19 +564,18 @@ async fn create_command_without_id_opens_form() {
 }
 
 #[tokio::test]
-async fn list_shows_users_events() {
+/// B7: hosts are shown as mentions, so listing makes no Discord API calls.
+async fn list_shows_users_events_without_api_calls() {
     let mut repo = MockSecretSantaRepo::new();
     repo.expect_events_for_user()
         .with(eq(user(2)))
         .returning(|_| Ok(vec![event(EventStatus::Running)]));
     let mut discord = MockDiscordApi::new();
-    discord
-        .expect_user_name()
-        .returning(|_| Ok("hostname".into()));
+    discord.expect_user_name().times(0);
     let mut responder = MockResponder::new();
     responder
         .expect_respond()
-        .withf(|r| content(r).contains("**Name:** Party"))
+        .withf(|r| content(r).contains("**Name:** Party") && content(r).contains("**Host:** <@1>"))
         .times(1)
         .returning(|_| Ok(()));
     let ss = santa(repo);
