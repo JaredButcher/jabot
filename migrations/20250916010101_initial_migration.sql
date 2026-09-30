@@ -1,30 +1,29 @@
--- Secret Santa Event Management Tables
+-- Framework-owned: one row per Discord user the bot has seen.
+CREATE TABLE users (
+    id         INTEGER PRIMARY KEY NOT NULL, -- Discord user id
+    created_at TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
--- Table for storing Discord users who participate in secret santa events
-CREATE TABLE event_users (
-    id INTEGER PRIMARY KEY NOT NULL,
+-- Secret Santa tables (feature-owned, prefixed ss_).
+
+-- Secret Santa-specific per-user data.
+CREATE TABLE ss_users (
+    user_id     INTEGER PRIMARY KEY NOT NULL REFERENCES users(id),
     global_wish TEXT
 );
 
--- Table for storing secret santa events
-CREATE TABLE events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-    name TEXT NOT NULL,
+CREATE TABLE ss_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+    name        TEXT    NOT NULL,
     description TEXT,
-    host_id INTEGER NOT NULL,
-    status INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (host_id) REFERENCES event_users(id)
+    host_id     INTEGER NOT NULL REFERENCES users(id),
+    status      INTEGER NOT NULL DEFAULT 0 -- 0 preparing, 1 running, 2 finished
 );
 
--- Table for tracking participants in specific events
-CREATE TABLE event_participants (
-    user_id INTEGER NOT NULL,
-    event_id INTEGER NOT NULL,
-    joined BOOLEAN NOT NULL DEFAULT FALSE,
-    event_wish TEXT,
-    assignee_id INTEGER,
-    PRIMARY KEY (user_id, event_id),
-    FOREIGN KEY (user_id) REFERENCES event_users(id),
-    FOREIGN KEY (event_id) REFERENCES events(id),
-    FOREIGN KEY (assignee_id) REFERENCES event_users(id)
+CREATE TABLE ss_participants (
+    event_id    INTEGER NOT NULL REFERENCES ss_events(id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    event_wish  TEXT,
+    assignee_id INTEGER REFERENCES users(id), -- who this participant gives a gift to
+    PRIMARY KEY (event_id, user_id)
 );

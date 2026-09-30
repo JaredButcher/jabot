@@ -7,6 +7,7 @@ mod error;
 mod feature;
 mod registry;
 mod request;
+mod users;
 
 pub use context::InteractionCtx;
 pub use discord::{DiscordApi, DiscordError, Responder, SerenityDiscordApi, SerenityResponder};
@@ -14,11 +15,14 @@ pub use error::FeatureError;
 pub use feature::Feature;
 pub use registry::{FeatureRegistry, RegistryBuilder, RegistryError};
 pub use request::{CommandRequest, ComponentKind, ComponentRequest, ModalRequest, Options};
+pub use users::{SqliteUserRepo, UserRepo};
 
 #[cfg(test)]
 pub use discord::{MockDiscordApi, MockResponder};
 #[cfg(test)]
 pub use feature::MockFeature;
+#[cfg(test)]
+pub use users::MockUserRepo;
 
 /// Helpers for feature tests.
 #[cfg(test)]
@@ -27,13 +31,25 @@ pub mod testing {
 
     use serenity::all::{CreateInteractionResponse, CreateInteractionResponseFollowup};
 
-    use super::{InteractionCtx, MockDiscordApi, MockResponder};
+    use super::{InteractionCtx, MockDiscordApi, MockResponder, MockUserRepo};
 
-    pub fn ctx(responder: MockResponder, discord: MockDiscordApi) -> InteractionCtx {
+    pub fn ctx(
+        responder: MockResponder,
+        discord: MockDiscordApi,
+        users: MockUserRepo,
+    ) -> InteractionCtx {
         InteractionCtx {
             responder: Arc::new(responder),
             discord: Arc::new(discord),
+            users: Arc::new(users),
         }
+    }
+
+    /// A `UserRepo` that accepts any `ensure` call.
+    pub fn any_users() -> MockUserRepo {
+        let mut users = MockUserRepo::new();
+        users.expect_ensure().returning(|_| Ok(()));
+        users
     }
 
     /// The response as Discord would receive it.

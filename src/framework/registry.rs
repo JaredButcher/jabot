@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use serenity::all::{
     CreateCommand, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, Http, Interaction, InteractionId,
+    CreateInteractionResponseMessage, Http, Interaction, InteractionId, UserId,
 };
 
 use super::context::InteractionCtx;
@@ -11,6 +11,7 @@ use super::discord::{SerenityDiscordApi, SerenityResponder};
 use super::error::FeatureError;
 use super::feature::Feature;
 use super::request::{CommandRequest, ComponentRequest, ModalRequest};
+use super::users::UserRepo;
 
 const GENERIC_ERROR: &str = "Something went wrong. Please try again later.";
 
@@ -40,11 +41,12 @@ pub struct FeatureRegistry {
     features: Vec<Arc<dyn Feature>>,
     by_command: HashMap<String, usize>,
     by_namespace: HashMap<&'static str, usize>,
+    users: Arc<dyn UserRepo>,
 }
 
-#[derive(Default)]
 pub struct RegistryBuilder {
     features: Vec<Arc<dyn Feature>>,
+    users: Arc<dyn UserRepo>,
 }
 
 impl RegistryBuilder {
@@ -91,6 +93,7 @@ impl RegistryBuilder {
             features: self.features,
             by_command,
             by_namespace,
+            users: self.users,
         })
     }
 }
@@ -110,8 +113,13 @@ fn namespace_of(custom_id: &str) -> &str {
 }
 
 impl FeatureRegistry {
-    pub fn builder() -> RegistryBuilder {
-        RegistryBuilder::default()
+    /// `users` backs the shared `users` table; every user who triggers an interaction gets a
+    /// row before their feature handler runs.
+    pub fn builder(users: Arc<dyn UserRepo>) -> RegistryBuilder {
+        RegistryBuilder {
+            features: Vec::new(),
+            users,
+        }
     }
 
     /// Every feature's slash commands, for `Command::set_global_commands`.
@@ -143,6 +151,7 @@ impl FeatureRegistry {
         InteractionCtx {
             responder: Arc::new(SerenityResponder::new(http.clone(), id, token.to_string())),
             discord: Arc::new(SerenityDiscordApi::new(http.clone())),
+            users: self.users.clone(),
         }
     }
 
@@ -153,7 +162,11 @@ impl FeatureRegistry {
             return finish(ctx, "registry", Err(error)).await;
         };
         let feature = &self.features[index];
-        finish(ctx, feature.name(), feature.on_command(ctx, req).await).await;
+        let result = match ensure_user(ctx, req.user).await {
+            Ok(()) => feature.on_command(ctx, req).await,
+            Err(error) => Err(error),
+        };
+        finish(ctx, feature.name(), result).await;
     }
 
     async fn route_component(&self, ctx: &InteractionCtx, req: ComponentRequest) {
@@ -166,7 +179,11 @@ impl FeatureRegistry {
             )
             .await;
         };
-        finish(ctx, feature.name(), feature.on_component(ctx, req).await).await;
+        let result = match ensure_user(ctx, req.user).await {
+            Ok(()) => feature.on_component(ctx, req).await,
+            Err(error) => Err(error),
+        };
+        finish(ctx, feature.name(), result).await;
     }
 
     async fn route_modal(&self, ctx: &InteractionCtx, req: ModalRequest) {
@@ -174,13 +191,22 @@ impl FeatureRegistry {
             tracing::warn!(custom_id = %req.custom_id, "no feature handles modal");
             return finish(ctx, "registry", Err(FeatureError::user("Unknown form"))).await;
         };
-        finish(ctx, feature.name(), feature.on_modal(ctx, req).await).await;
+        let result = match ensure_user(ctx, req.user).await {
+            Ok(()) => feature.on_modal(ctx, req).await,
+            Err(error) => Err(error),
+        };
+        finish(ctx, feature.name(), result).await;
     }
 
     fn feature_for(&self, custom_id: &str) -> Option<&Arc<dyn Feature>> {
         let index = *self.by_namespace.get(namespace_of(custom_id))?;
         Some(&self.features[index])
     }
+}
+
+/// Give the interacting user a `users` row, so feature tables can reference them.
+async fn ensure_user(ctx: &InteractionCtx, user: UserId) -> Result<(), FeatureError> {
+    Ok(ctx.users.ensure(&[user]).await?)
 }
 
 /// Turn a handler error into an ephemeral reply, using a followup if the handler already
@@ -216,9 +242,13 @@ async fn finish(ctx: &InteractionCtx, feature: &str, result: Result<(), FeatureE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framework::testing::{content, ctx, followup_content};
-    use crate::framework::{MockDiscordApi, MockFeature, MockResponder};
-    use serenity::all::UserId;
+    use crate::framework::testing::{any_users, content, ctx, followup_content};
+    use crate::framework::{MockDiscordApi, MockFeature, MockResponder, MockUserRepo};
+    use mockall::Sequence;
+
+    fn builder() -> RegistryBuilder {
+        FeatureRegistry::builder(Arc::new(MockUserRepo::new()))
+    }
 
     fn feature(
         name: &'static str,
@@ -255,13 +285,9 @@ mod tests {
             .returning(|_, _| Ok(()));
         let mut other = feature("Other", "ot", &["ot"]);
         other.expect_on_component().times(0);
-        let registry = FeatureRegistry::builder()
-            .register(ss)
-            .register(other)
-            .build()
-            .unwrap();
+        let registry = builder().register(ss).register(other).build().unwrap();
 
-        let ctx = ctx(MockResponder::new(), MockDiscordApi::new());
+        let ctx = ctx(MockResponder::new(), MockDiscordApi::new(), any_users());
         registry
             .route_component(
                 &ctx,
@@ -277,9 +303,9 @@ mod tests {
             .withf(|_, req| req.command == "ss")
             .times(1)
             .returning(|_, _| Ok(()));
-        let registry = FeatureRegistry::builder().register(ss).build().unwrap();
+        let registry = builder().register(ss).build().unwrap();
 
-        let ctx = ctx(MockResponder::new(), MockDiscordApi::new());
+        let ctx = ctx(MockResponder::new(), MockDiscordApi::new(), any_users());
         registry
             .route_command(&ctx, CommandRequest::new(UserId::new(1), "ss"))
             .await;
@@ -289,21 +315,25 @@ mod tests {
     async fn routes_modal_by_namespace() {
         let mut ss = feature("Secret Santa", "ss", &[]);
         ss.expect_on_modal().times(1).returning(|_, _| Ok(()));
-        let registry = FeatureRegistry::builder().register(ss).build().unwrap();
+        let registry = builder().register(ss).build().unwrap();
 
-        let ctx = ctx(MockResponder::new(), MockDiscordApi::new());
+        let ctx = ctx(MockResponder::new(), MockDiscordApi::new(), any_users());
         let req = ModalRequest::new(UserId::new(1), "ss:create:modal", []);
         registry.route_modal(&ctx, req).await;
     }
 
     #[tokio::test]
     async fn unknown_namespace_gets_ephemeral_reply() {
-        let registry = FeatureRegistry::builder()
+        let registry = builder()
             .register(feature("Secret Santa", "ss", &[]))
             .build()
             .unwrap();
 
-        let ctx = ctx(replies_once("Unknown component"), MockDiscordApi::new());
+        let ctx = ctx(
+            replies_once("Unknown component"),
+            MockDiscordApi::new(),
+            any_users(),
+        );
         registry
             .route_component(&ctx, ComponentRequest::button(UserId::new(1), "zz:btn"))
             .await;
@@ -311,7 +341,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_namespace() {
-        let result = FeatureRegistry::builder()
+        let result = builder()
             .register(feature("A", "ss", &["a"]))
             .register(feature("B", "ss", &["b"]))
             .build();
@@ -328,7 +358,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_command() {
-        let result = FeatureRegistry::builder()
+        let result = builder()
             .register(feature("A", "a", &["ss"]))
             .register(feature("B", "b", &["ss"]))
             .build();
@@ -345,9 +375,7 @@ mod tests {
 
     #[test]
     fn rejects_namespace_with_separator() {
-        let result = FeatureRegistry::builder()
-            .register(feature("A", "a:b", &[]))
-            .build();
+        let result = builder().register(feature("A", "a:b", &[])).build();
 
         assert!(matches!(
             result,
@@ -357,7 +385,7 @@ mod tests {
 
     #[test]
     fn collects_commands_from_all_features() {
-        let registry = FeatureRegistry::builder()
+        let registry = builder()
             .register(feature("A", "a", &["one", "two"]))
             .register(feature("B", "b", &["three"]))
             .build()
@@ -376,9 +404,13 @@ mod tests {
         let mut ss = feature("Secret Santa", "ss", &[]);
         ss.expect_on_component()
             .returning(|_, _| Err(FeatureError::user("Event not found")));
-        let registry = FeatureRegistry::builder().register(ss).build().unwrap();
+        let registry = builder().register(ss).build().unwrap();
 
-        let ctx = ctx(replies_once("Event not found"), MockDiscordApi::new());
+        let ctx = ctx(
+            replies_once("Event not found"),
+            MockDiscordApi::new(),
+            any_users(),
+        );
         registry
             .route_component(&ctx, ComponentRequest::button(UserId::new(1), "ss:x"))
             .await;
@@ -389,9 +421,13 @@ mod tests {
         let mut ss = feature("Secret Santa", "ss", &[]);
         ss.expect_on_component()
             .returning(|_, _| Err(FeatureError::internal("db is on fire")));
-        let registry = FeatureRegistry::builder().register(ss).build().unwrap();
+        let registry = builder().register(ss).build().unwrap();
 
-        let ctx = ctx(replies_once(GENERIC_ERROR), MockDiscordApi::new());
+        let ctx = ctx(
+            replies_once(GENERIC_ERROR),
+            MockDiscordApi::new(),
+            any_users(),
+        );
         registry
             .route_component(&ctx, ComponentRequest::button(UserId::new(1), "ss:x"))
             .await;
@@ -402,7 +438,7 @@ mod tests {
         let mut ss = feature("Secret Santa", "ss", &[]);
         ss.expect_on_component()
             .returning(|_, _| Err(FeatureError::user("Late failure")));
-        let registry = FeatureRegistry::builder().register(ss).build().unwrap();
+        let registry = builder().register(ss).build().unwrap();
 
         let mut responder = MockResponder::new();
         responder.expect_has_responded().return_const(true);
@@ -412,7 +448,46 @@ mod tests {
             .withf(|f| followup_content(f) == "Late failure")
             .times(1)
             .returning(|_| Ok(()));
-        let ctx = ctx(responder, MockDiscordApi::new());
+        let ctx = ctx(responder, MockDiscordApi::new(), any_users());
+        registry
+            .route_component(&ctx, ComponentRequest::button(UserId::new(1), "ss:x"))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn ensures_user_row_before_dispatch() {
+        let mut seq = Sequence::new();
+        let mut users = MockUserRepo::new();
+        users
+            .expect_ensure()
+            .withf(|ids| ids == [UserId::new(7)])
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(()));
+        let mut ss = feature("Secret Santa", "ss", &["ss"]);
+        ss.expect_on_command()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(()));
+        let registry = builder().register(ss).build().unwrap();
+
+        let ctx = ctx(MockResponder::new(), MockDiscordApi::new(), users);
+        registry
+            .route_command(&ctx, CommandRequest::new(UserId::new(7), "ss"))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn failing_to_ensure_user_skips_handler() {
+        let mut users = MockUserRepo::new();
+        users
+            .expect_ensure()
+            .returning(|_| Err(sqlx::Error::PoolTimedOut));
+        let mut ss = feature("Secret Santa", "ss", &[]);
+        ss.expect_on_component().times(0);
+        let registry = builder().register(ss).build().unwrap();
+
+        let ctx = ctx(replies_once(GENERIC_ERROR), MockDiscordApi::new(), users);
         registry
             .route_component(&ctx, ComponentRequest::button(UserId::new(1), "ss:x"))
             .await;

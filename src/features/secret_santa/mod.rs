@@ -474,6 +474,7 @@ impl SecretSanta {
             "Modify users add: {:?} remove: {:?}",
             users_to_add, users_to_remove
         );
+        ctx.users.ensure(&users_to_add).await?;
         self.repo
             .set_participants(evt_id, &users_to_add, &users_to_remove)
             .await?;

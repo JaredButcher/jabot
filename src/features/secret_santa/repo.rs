@@ -1,5 +1,8 @@
-//! Secret Santa storage. Handlers depend on the `SecretSantaRepo` trait so tests can mock it;
-//! `SqliteSecretSantaRepo` is the real implementation.
+//! Secret Santa storage (the `ss_*` tables). Handlers depend on the `SecretSantaRepo` trait so
+//! tests can mock it; `SqliteSecretSantaRepo` is the real implementation.
+//!
+//! Every user id written here must already have a row in the shared `users` table
+//! (`framework::UserRepo::ensure`).
 
 use async_trait::async_trait;
 use serenity::all::UserId;
@@ -74,7 +77,7 @@ fn db_id(user: UserId) -> i64 {
 impl SecretSantaRepo for SqliteSecretSantaRepo {
     async fn get_event(&self, id: EventId) -> Result<Option<Event>, sqlx::Error> {
         let row = sqlx::query!(
-            "SELECT id, name, description, host_id, status FROM events WHERE id = ?",
+            "SELECT id, name, description, host_id, status FROM ss_events WHERE id = ?",
             id.0
         )
         .fetch_optional(&self.pool)
@@ -92,7 +95,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         let user = db_id(user);
         let rows = sqlx::query!(
             "SELECT e.id, e.name, e.description, e.host_id, e.status
-             FROM events e JOIN event_participants ep ON e.id = ep.event_id
+             FROM ss_events e JOIN ss_participants ep ON e.id = ep.event_id
              WHERE ep.user_id = ?
              ORDER BY e.id",
             user
@@ -115,7 +118,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         let host = db_id(host);
         let finished = i64::from(EventStatus::Finished);
         let row = sqlx::query!(
-            "SELECT COUNT(*) AS count FROM events WHERE host_id = ? AND status != ?",
+            "SELECT COUNT(*) AS count FROM ss_events WHERE host_id = ? AND status != ?",
             host,
             finished
         )
@@ -133,14 +136,8 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         let host = db_id(host);
         let status = i64::from(EventStatus::PreRun);
         let mut tx = self.pool.begin().await?;
-        sqlx::query!(
-            "INSERT OR IGNORE INTO event_users (id, global_wish) VALUES (?, '')",
-            host
-        )
-        .execute(&mut *tx)
-        .await?;
         let event = sqlx::query!(
-            "INSERT INTO events (name, description, host_id, status) VALUES (?, ?, ?, ?)",
+            "INSERT INTO ss_events (name, description, host_id, status) VALUES (?, ?, ?, ?)",
             name,
             description,
             host,
@@ -150,7 +147,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         .await?
         .last_insert_rowid();
         sqlx::query!(
-            "INSERT INTO event_participants (user_id, event_id, joined) VALUES (?, ?, TRUE)",
+            "INSERT INTO ss_participants (user_id, event_id) VALUES (?, ?)",
             host,
             event
         )
@@ -167,7 +164,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         description: Option<String>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
-            "UPDATE events SET name = ?, description = ? WHERE id = ?",
+            "UPDATE ss_events SET name = ?, description = ? WHERE id = ?",
             name,
             description,
             id.0
@@ -179,7 +176,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
 
     async fn participants(&self, id: EventId) -> Result<Vec<Participant>, sqlx::Error> {
         let rows = sqlx::query!(
-            "SELECT user_id, assignee_id FROM event_participants WHERE event_id = ? ORDER BY rowid",
+            "SELECT user_id, assignee_id FROM ss_participants WHERE event_id = ? ORDER BY rowid",
             id.0
         )
         .fetch_all(&self.pool)
@@ -202,11 +199,8 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         let mut tx = self.pool.begin().await?;
         for &user in add {
             let user = db_id(user);
-            sqlx::query!("INSERT OR IGNORE INTO event_users (id) VALUES (?)", user)
-                .execute(&mut *tx)
-                .await?;
             sqlx::query!(
-                "INSERT OR IGNORE INTO event_participants (user_id, event_id, joined) VALUES (?, ?, TRUE)",
+                "INSERT OR IGNORE INTO ss_participants (user_id, event_id) VALUES (?, ?)",
                 user,
                 id.0
             )
@@ -216,7 +210,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         for &user in remove {
             let user = db_id(user);
             sqlx::query!(
-                "DELETE FROM event_participants WHERE event_id = ? AND user_id = ?",
+                "DELETE FROM ss_participants WHERE event_id = ? AND user_id = ?",
                 id.0,
                 user
             )
@@ -235,7 +229,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         let running = i64::from(EventStatus::Running);
         let mut tx = self.pool.begin().await?;
         let started = sqlx::query!(
-            "UPDATE events SET status = ? WHERE id = ? AND status = ?",
+            "UPDATE ss_events SET status = ? WHERE id = ? AND status = ?",
             running,
             id.0,
             pre_run
@@ -252,7 +246,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
             let santa = db_id(santa);
             let recipient = db_id(recipient);
             let updated = sqlx::query!(
-                "UPDATE event_participants SET assignee_id = ? WHERE event_id = ? AND user_id = ?",
+                "UPDATE ss_participants SET assignee_id = ? WHERE event_id = ? AND user_id = ?",
                 recipient,
                 id.0,
                 santa
@@ -278,7 +272,7 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         if from.is_empty() {
             return Ok(false);
         }
-        let mut query = QueryBuilder::new("UPDATE events SET status = ");
+        let mut query = QueryBuilder::new("UPDATE ss_events SET status = ");
         query
             .push_bind(i64::from(to))
             .push(" WHERE id = ")
@@ -297,9 +291,20 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::framework::{SqliteUserRepo, UserRepo};
 
     fn user(id: u64) -> UserId {
         UserId::new(id)
+    }
+
+    /// A repo whose database already knows users 1 through 99.
+    async fn setup(pool: SqlitePool) -> SqliteSecretSantaRepo {
+        let known: Vec<UserId> = (1..=99).map(user).collect();
+        SqliteUserRepo::new(pool.clone())
+            .ensure(&known)
+            .await
+            .unwrap();
+        SqliteSecretSantaRepo::new(pool)
     }
 
     async fn event_with(repo: &SqliteSecretSantaRepo, host: UserId, others: &[UserId]) -> EventId {
@@ -317,7 +322,7 @@ mod tests {
 
     #[sqlx::test]
     async fn create_event_adds_host_as_participant(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
 
         let id = repo
             .create_event(user(1), "Party", "Bring snacks")
@@ -341,7 +346,7 @@ mod tests {
 
     #[sqlx::test]
     async fn set_participants_adds_and_removes(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
         let id = event_with(&repo, user(1), &[user(2), user(3)]).await;
 
         repo.set_participants(id, &[user(4)], &[user(2)])
@@ -360,7 +365,7 @@ mod tests {
 
     #[sqlx::test]
     async fn events_for_user_lists_only_their_events(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
         let a = event_with(&repo, user(1), &[user(2)]).await;
         let _b = event_with(&repo, user(3), &[]).await;
 
@@ -371,7 +376,7 @@ mod tests {
 
     #[sqlx::test]
     async fn count_active_hosted_ignores_finished(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
         let a = event_with(&repo, user(1), &[]).await;
         event_with(&repo, user(1), &[]).await;
         repo.transition(a, &[EventStatus::PreRun], EventStatus::Finished)
@@ -384,7 +389,7 @@ mod tests {
     /// B1: starting one event must not touch the user's assignments in other events.
     #[sqlx::test]
     async fn start_event_only_assigns_within_event(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
         let a = event_with(&repo, user(1), &[user(2)]).await;
         let b = event_with(&repo, user(3), &[user(1)]).await;
         assert!(
@@ -408,7 +413,7 @@ mod tests {
     /// B2: a failed assignment write rolls back the status change.
     #[sqlx::test]
     async fn start_event_is_atomic(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
         let id = event_with(&repo, user(1), &[user(2)]).await;
 
         let not_a_participant = user(99);
@@ -426,7 +431,7 @@ mod tests {
     /// B5: a second start (e.g. a double click) changes nothing.
     #[sqlx::test]
     async fn start_event_twice_is_rejected(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
         let id = event_with(&repo, user(1), &[user(2)]).await;
         assert!(
             repo.start_event(id, &[(user(1), user(2)), (user(2), user(1))])
@@ -446,7 +451,7 @@ mod tests {
     /// B5: transitions only apply from the expected status.
     #[sqlx::test]
     async fn transition_requires_expected_status(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
         let id = event_with(&repo, user(1), &[]).await;
 
         let from_running = repo
@@ -469,7 +474,7 @@ mod tests {
 
     #[sqlx::test]
     async fn update_event_changes_name_and_description(pool: SqlitePool) {
-        let repo = SqliteSecretSantaRepo::new(pool);
+        let repo = setup(pool).await;
         let id = event_with(&repo, user(1), &[]).await;
 
         repo.update_event(id, "New", None).await.unwrap();
@@ -477,5 +482,19 @@ mod tests {
         let event = repo.get_event(id).await.unwrap().unwrap();
         assert_eq!(event.name, "New");
         assert_eq!(event.description, None);
+    }
+
+    #[sqlx::test]
+    async fn participants_must_be_known_users(pool: SqlitePool) {
+        let repo = setup(pool).await;
+        let id = event_with(&repo, user(1), &[]).await;
+
+        let unknown = user(1000);
+        let result = repo.set_participants(id, &[unknown], &[]).await;
+
+        assert!(
+            result.is_err(),
+            "foreign key to users(id) should be enforced"
+        );
     }
 }

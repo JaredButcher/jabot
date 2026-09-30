@@ -3,7 +3,7 @@ use std::fs;
 use std::sync::Arc;
 
 use jabot::features::secret_santa::{SecretSanta, SqliteSecretSantaRepo};
-use jabot::framework::FeatureRegistry;
+use jabot::framework::{FeatureRegistry, SqliteUserRepo};
 use serenity::all::{Command, Interaction};
 use serenity::async_trait;
 use serenity::model::gateway::Ready;
@@ -79,7 +79,7 @@ async fn main() {
     let token = get_discord_token().expect("Failed to get Discord token");
     let pool = connect_database().await;
 
-    let registry = FeatureRegistry::builder()
+    let registry = FeatureRegistry::builder(Arc::new(SqliteUserRepo::new(pool.clone())))
         .register(SecretSanta::new(Arc::new(SqliteSecretSantaRepo::new(
             pool.clone(),
         ))))
