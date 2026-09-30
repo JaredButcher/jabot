@@ -45,12 +45,20 @@ impl From<EventStatus> for i64 {
     }
 }
 
-impl From<i64> for EventStatus {
-    fn from(value: i64) -> Self {
+/// A stored status value that doesn't name any `EventStatus`.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("invalid Secret Santa event status {0}")]
+pub struct InvalidStatus(pub i64);
+
+impl TryFrom<i64> for EventStatus {
+    type Error = InvalidStatus;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
         match value {
-            1 => EventStatus::Running,
-            2 => EventStatus::Finished,
-            _ => EventStatus::PreRun, // Default to PreRun for invalid values
+            0 => Ok(EventStatus::PreRun),
+            1 => Ok(EventStatus::Running),
+            2 => Ok(EventStatus::Finished),
+            other => Err(InvalidStatus(other)),
         }
     }
 }
@@ -103,5 +111,24 @@ pub enum SsError {
 impl From<SsError> for FeatureError {
     fn from(error: SsError) -> Self {
         FeatureError::user(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B8: unknown values are an error, not a silently startable event.
+    #[test]
+    fn status_round_trips_and_rejects_unknown_values() {
+        for status in [
+            EventStatus::PreRun,
+            EventStatus::Running,
+            EventStatus::Finished,
+        ] {
+            assert_eq!(EventStatus::try_from(i64::from(status)), Ok(status));
+        }
+        assert_eq!(EventStatus::try_from(3), Err(InvalidStatus(3)));
+        assert_eq!(EventStatus::try_from(-1), Err(InvalidStatus(-1)));
     }
 }

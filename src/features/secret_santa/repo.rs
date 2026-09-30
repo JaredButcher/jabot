@@ -73,6 +73,22 @@ fn db_id(user: UserId) -> i64 {
     i64::from(user)
 }
 
+fn event(
+    id: i64,
+    name: String,
+    description: Option<String>,
+    host: i64,
+    status: i64,
+) -> Result<Event, sqlx::Error> {
+    Ok(Event {
+        id: EventId(id),
+        name,
+        description,
+        host: user_id(host),
+        status: EventStatus::try_from(status).map_err(|e| sqlx::Error::Decode(Box::new(e)))?,
+    })
+}
+
 #[async_trait]
 impl SecretSantaRepo for SqliteSecretSantaRepo {
     async fn get_event(&self, id: EventId) -> Result<Option<Event>, sqlx::Error> {
@@ -82,13 +98,8 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         )
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|r| Event {
-            id: EventId(r.id),
-            name: r.name,
-            description: r.description,
-            host: user_id(r.host_id),
-            status: EventStatus::from(r.status),
-        }))
+        row.map(|r| event(r.id, r.name, r.description, r.host_id, r.status))
+            .transpose()
     }
 
     async fn events_for_user(&self, user: UserId) -> Result<Vec<Event>, sqlx::Error> {
@@ -102,16 +113,9 @@ impl SecretSantaRepo for SqliteSecretSantaRepo {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| Event {
-                id: EventId(r.id),
-                name: r.name,
-                description: r.description,
-                host: user_id(r.host_id),
-                status: EventStatus::from(r.status),
-            })
-            .collect())
+        rows.into_iter()
+            .map(|r| event(r.id, r.name, r.description, r.host_id, r.status))
+            .collect()
     }
 
     async fn count_active_hosted(&self, host: UserId) -> Result<i64, sqlx::Error> {
@@ -496,5 +500,21 @@ mod tests {
             result.is_err(),
             "foreign key to users(id) should be enforced"
         );
+    }
+
+    /// B8: a corrupted status is reported, not read as PreRun.
+    #[sqlx::test]
+    async fn invalid_status_is_an_error(pool: SqlitePool) {
+        let repo = setup(pool.clone()).await;
+        let id = event_with(&repo, user(1), &[]).await;
+        sqlx::query!("UPDATE ss_events SET status = 7 WHERE id = ?", id.0)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            repo.get_event(id).await,
+            Err(sqlx::Error::Decode(_))
+        ));
     }
 }
