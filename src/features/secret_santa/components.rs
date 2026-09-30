@@ -22,6 +22,7 @@ pub async fn set_participants(
         return Err(SsError::UnexpectedComponent(req.kind.clone()));
     };
     let event = load(ss, id).await?;
+    rules::ensure_host(&event, req.user)?;
     rules::ensure_participants_editable(&event)?;
 
     let existing: Vec<UserId> = ss

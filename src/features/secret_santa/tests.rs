@@ -365,6 +365,41 @@ async fn picker_adds_and_removes_then_invites_new_participants() {
     .unwrap();
 }
 
+/// B3: only the host may change who is in the event.
+#[tokio::test]
+async fn picker_rejects_non_host() {
+    let mut repo = repo_with(event(EventStatus::PreRun), &[1, 2]);
+    repo.expect_set_participants().times(0);
+    let ss = santa(repo);
+
+    let ctx = plain_ctx(MockResponder::new());
+    let result = ss
+        .on_component(
+            &ctx,
+            ComponentRequest::user_select(user(2), "ss:participants:5", vec![user(2)]),
+        )
+        .await;
+    assert_refused(result, text::NOT_HOST);
+}
+
+/// B3: a picker for a deleted event is refused rather than crashing.
+#[tokio::test]
+async fn picker_for_missing_event_is_refused() {
+    let mut repo = MockSecretSantaRepo::new();
+    repo.expect_get_event().returning(|_| Ok(None));
+    repo.expect_set_participants().times(0);
+    let ss = santa(repo);
+
+    let ctx = plain_ctx(MockResponder::new());
+    let result = ss
+        .on_component(
+            &ctx,
+            ComponentRequest::user_select(host(), "ss:participants:5", vec![user(2)]),
+        )
+        .await;
+    assert_refused(result, text::EVENT_NOT_FOUND);
+}
+
 #[tokio::test]
 async fn picker_is_locked_after_start() {
     let mut repo = repo_with(event(EventStatus::Running), &[1, 2]);
