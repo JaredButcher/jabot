@@ -1049,6 +1049,24 @@ fn get_discord_token() -> Result<String, Box<dyn std::error::Error>> {
     Err("DISCORD_TOKEN_FILE environment variable not found".into())
 }
 
+/// Parse `DATABASE_URL` (e.g. `sqlite:database.sqlite`) as a URL, not a file path, so the bot
+/// opens the same database the sqlx CLI and `query!` macros use.
+fn connect_options(url: &str) -> Result<sqlx::sqlite::SqliteConnectOptions, sqlx::Error> {
+    use std::str::FromStr;
+    Ok(sqlx::sqlite::SqliteConnectOptions::from_str(url)?.create_if_missing(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_options_parses_url_scheme() {
+        let opts = connect_options("sqlite:foo.sqlite").unwrap();
+        assert_eq!(opts.get_filename(), std::path::Path::new("foo.sqlite"));
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Try to load .env file if it exists
@@ -1063,13 +1081,10 @@ async fn main() {
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
 
+    let database_url = std::env::var("DATABASE_URL").expect("Database url not in enviroment");
     let database = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(5)
-        .connect_with(
-            sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(std::env::var("DATABASE_URL").expect("Database url not in enviroment"))
-                .create_if_missing(true),
-        )
+        .connect_with(connect_options(&database_url).expect("Invalid DATABASE_URL"))
         .await
         .expect("Failed to connect to database");
 
