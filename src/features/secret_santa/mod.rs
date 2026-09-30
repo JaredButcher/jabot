@@ -1,5 +1,7 @@
 //! Secret Santa: hosts create an event, add participants, and start it to draw assignments.
 
+mod custom_id;
+mod model;
 mod text;
 
 use std::collections::HashSet;
@@ -17,6 +19,8 @@ use crate::framework::{
     CommandRequest, ComponentKind, ComponentRequest, Feature, FeatureError, InteractionCtx,
     ModalRequest,
 };
+use custom_id::SsId;
+use model::EventId;
 use text::Strings;
 
 const SS_HOST_EVENT_LIMIT: i32 = 32;
@@ -60,11 +64,6 @@ fn ephemeral(content: impl Into<String>) -> CreateInteractionResponse {
     )
 }
 
-/// Event id from a custom id of the form `<prefix>:<id>`.
-fn trailing_id(custom_id: &str) -> Option<i64> {
-    custom_id.rsplit(':').next()?.parse().ok()
-}
-
 pub struct SecretSanta {
     database: sqlx::SqlitePool,
 }
@@ -82,7 +81,7 @@ impl Feature for SecretSanta {
     }
 
     fn namespace(&self) -> &'static str {
-        "ss"
+        custom_id::NAMESPACE
     }
 
     fn commands(&self) -> Vec<CreateCommand> {
@@ -152,13 +151,10 @@ impl Feature for SecretSanta {
     }
 
     async fn on_modal(&self, ctx: &InteractionCtx, req: ModalRequest) -> Result<(), FeatureError> {
-        match req.custom_id.as_str() {
-            Strings::MODAL_SS_CREATE_ID => self.create_modal(ctx, &req).await,
-            c if c.contains(Strings::MODAL_SS_CREATE_ID) => self.edit_modal(ctx, &req).await,
-            _ => {
-                println!("Unknown modal ID: {}", req.custom_id);
-                Ok(())
-            }
+        match req.custom_id.parse::<SsId>()? {
+            SsId::CreateModal => self.create_modal(ctx, &req).await,
+            SsId::EditModal(id) => self.edit_modal(ctx, &req, id.0).await,
+            other => Err(FeatureError::internal(format!("{other:?} is not a modal"))),
         }
     }
 
@@ -167,25 +163,14 @@ impl Feature for SecretSanta {
         ctx: &InteractionCtx,
         req: ComponentRequest,
     ) -> Result<(), FeatureError> {
-        let c = req.custom_id.as_str();
-        let Some(evt_id) = trailing_id(c) else {
-            println!("No event provided {}", c);
-            ctx.responder
-                .respond(ephemeral("No event provided"))
-                .await?;
-            return Ok(());
-        };
-        if c.contains(Strings::COMP_SS_INFO_USER_ID) {
-            self.participants_select(ctx, &req, evt_id).await
-        } else if c.contains(Strings::COMP_SS_BTN_START_ID) {
-            self.start_button(ctx, &req, evt_id).await
-        } else if c.contains(Strings::COMP_SS_BTN_END_ID) {
-            self.end_button(ctx, &req, evt_id).await
-        } else if c.contains(Strings::COMP_SS_BTN_CANCEL_ID) {
-            self.cancel_button(ctx, &req, evt_id).await
-        } else {
-            println!("Unreconnized component interaction {}", c);
-            Ok(())
+        match req.custom_id.parse::<SsId>()? {
+            SsId::UserSelect(id) => self.participants_select(ctx, &req, id.0).await,
+            SsId::Start(id) => self.start_button(ctx, &req, id.0).await,
+            SsId::End(id) => self.end_button(ctx, &req, id.0).await,
+            SsId::Cancel(id) => self.cancel_button(ctx, &req, id.0).await,
+            other => Err(FeatureError::internal(format!(
+                "{other:?} is not a component"
+            ))),
         }
     }
 }
@@ -211,25 +196,28 @@ impl SecretSanta {
         let Some(evt_id) = req.options.i64(Strings::OPT_SS_EVT_ID_NAME) else {
             // Send modal to create event
             return Ok(CreateInteractionResponse::Modal(
-                CreateModal::new(Strings::MODAL_SS_CREATE_ID, Strings::MODAL_SS_CREATE_TITLE)
-                    .components(vec![
-                        CreateActionRow::InputText(
-                            CreateInputText::new(
-                                InputTextStyle::Short,
-                                Strings::MODAL_SS_INFO_NAME_LABEL,
-                                Strings::MODAL_SS_INFO_NAME_ID,
-                            )
-                            .required(true),
-                        ),
-                        CreateActionRow::InputText(
-                            CreateInputText::new(
-                                InputTextStyle::Short,
-                                Strings::MODAL_SS_INFO_DESC_LABEL,
-                                Strings::MODAL_SS_INFO_DESC_ID,
-                            )
-                            .required(false),
-                        ),
-                    ]),
+                CreateModal::new(
+                    SsId::CreateModal.to_string(),
+                    Strings::MODAL_SS_CREATE_TITLE,
+                )
+                .components(vec![
+                    CreateActionRow::InputText(
+                        CreateInputText::new(
+                            InputTextStyle::Short,
+                            Strings::MODAL_SS_INFO_NAME_LABEL,
+                            Strings::MODAL_SS_INFO_NAME_ID,
+                        )
+                        .required(true),
+                    ),
+                    CreateActionRow::InputText(
+                        CreateInputText::new(
+                            InputTextStyle::Short,
+                            Strings::MODAL_SS_INFO_DESC_LABEL,
+                            Strings::MODAL_SS_INFO_DESC_ID,
+                        )
+                        .required(false),
+                    ),
+                ]),
             ));
         };
 
@@ -246,7 +234,7 @@ impl SecretSanta {
         // Send modal to modify event
         Ok(CreateInteractionResponse::Modal(
             CreateModal::new(
-                format!("{}:{}", Strings::MODAL_SS_CREATE_ID, evt_id),
+                SsId::EditModal(EventId(evt_id)).to_string(),
                 Strings::MODAL_SS_CREATE_EDIT_TITLE,
             )
             .components(vec![
@@ -325,7 +313,7 @@ impl SecretSanta {
             if event_status == SSState::PreRun {
                 components.push(CreateActionRow::SelectMenu(
                     CreateSelectMenu::new(
-                        format!("{}:{}", Strings::COMP_SS_INFO_USER_ID, evt_id),
+                        SsId::UserSelect(EventId(evt_id)).to_string(),
                         CreateSelectMenuKind::User {
                             default_users: Some(user_ids),
                         },
@@ -336,15 +324,14 @@ impl SecretSanta {
             }
 
             let mut buttons = vec![];
-            let cancel_btn =
-                CreateButton::new(format!("{}:{}", Strings::COMP_SS_BTN_CANCEL_ID, evt_id))
-                    .label("Cancel Event")
-                    .style(ButtonStyle::Danger);
+            let cancel_btn = CreateButton::new(SsId::Cancel(EventId(evt_id)).to_string())
+                .label("Cancel Event")
+                .style(ButtonStyle::Danger);
 
             match event_status {
                 SSState::PreRun => {
                     buttons.push(
-                        CreateButton::new(format!("{}:{}", Strings::COMP_SS_BTN_START_ID, evt_id))
+                        CreateButton::new(SsId::Start(EventId(evt_id)).to_string())
                             .label("Start Event")
                             .style(ButtonStyle::Success),
                     );
@@ -352,7 +339,7 @@ impl SecretSanta {
                 }
                 SSState::Running => {
                     buttons.push(
-                        CreateButton::new(format!("{}:{}", Strings::COMP_SS_BTN_END_ID, evt_id))
+                        CreateButton::new(SsId::End(EventId(evt_id)).to_string())
                             .label("End Event")
                             .style(ButtonStyle::Success),
                     );
@@ -519,12 +506,9 @@ impl SecretSanta {
         &self,
         ctx: &InteractionCtx,
         req: &ModalRequest,
+        evt_id: i64,
     ) -> Result<(), FeatureError> {
         // Modify Event
-        let Some(evt_id) = trailing_id(&req.custom_id) else {
-            ctx.responder.respond(message("Invalid event ID")).await?;
-            return Ok(());
-        };
         let name = req
             .field(Strings::MODAL_SS_INFO_NAME_ID)
             .map(str::to_string);

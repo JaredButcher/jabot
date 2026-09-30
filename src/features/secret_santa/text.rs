@@ -23,17 +23,10 @@ impl Strings {
     pub const OPT_SS_EVT_ID_DESC: &'static str = "Id number of Secret Santa event.";
 
     // Modal constants
-    pub const MODAL_SS_CREATE_ID: &'static str = "ss:create:modal";
     pub const MODAL_SS_CREATE_TITLE: &'static str = "Secret Santa Event";
     pub const MODAL_SS_CREATE_EDIT_TITLE: &'static str = "Modify Secret Santa Event";
-    pub const MODAL_SS_INFO_NAME_ID: &'static str = "ss:info:name";
+    pub const MODAL_SS_INFO_NAME_ID: &'static str = "name";
     pub const MODAL_SS_INFO_NAME_LABEL: &'static str = "Event Name";
-    pub const MODAL_SS_INFO_DESC_ID: &'static str = "ss:info:description";
+    pub const MODAL_SS_INFO_DESC_ID: &'static str = "description";
     pub const MODAL_SS_INFO_DESC_LABEL: &'static str = "Event Description";
-
-    // Component ids
-    pub const COMP_SS_INFO_USER_ID: &'static str = "ss:info:users";
-    pub const COMP_SS_BTN_START_ID: &'static str = "ss:btn:start";
-    pub const COMP_SS_BTN_END_ID: &'static str = "ss:btn:end";
-    pub const COMP_SS_BTN_CANCEL_ID: &'static str = "ss:btn:cancel";
 }
