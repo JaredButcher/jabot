@@ -1,0 +1,37 @@
+# jabot under Docker Compose. Settings come from .env next to this file (see .env.example).
+# TLS is the front proxy's job; the bot serves plain HTTP on HTTP_PORT.
+services:
+  jabot:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      DATABASE_URL: sqlite:///data/database.sqlite
+      DISCORD_TOKEN_FILE: /run/secrets/discord_token
+      HTTP_PORT: ${HTTP_PORT:-8080}
+      BASE_PATH: ${BASE_PATH:-/jabot}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      DOMAIN: ${DOMAIN:-}
+      LAN_HOST: ${LAN_HOST:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      # Loopback by default: reachable by a proxy on this machine, not from the network.
+      - "${HTTP_PUBLISH:-127.0.0.1}:${HTTP_PORT:-8080}:${HTTP_PORT:-8080}"
+    volumes:
+      # Must be writable by uid 10001: sudo chown -R 10001:10001 data
+      - ./data:/data
+    secrets:
+      - discord_token
+
+networks:
+  default:
+    ipam:
+      config:
+        # A fixed subnet keeps the gateway at 172.30.0.1. Connections to the published port
+        # from this machine arrive from there, so that's the address for TRUSTED_PROXIES.
+        - subnet: 172.30.0.0/24
+
+secrets:
+  discord_token:
+    # Must be readable by uid 10001: sudo chown 10001:10001 secrets/discord_token
+    file: ./secrets/discord_token

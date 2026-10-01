@@ -34,3 +34,6 @@ target
 sqlite
 install.ps1
 bundle.tar.gz
+# Docker deployment
+data/
+secrets/
