@@ -6,14 +6,21 @@ use serenity::all::{
     CreateInteractionResponseMessage, Http, Interaction, InteractionId, UserId,
 };
 
+use axum::Router;
+use axum::extract::{DefaultBodyLimit, Extension};
+
 use super::context::InteractionCtx;
-use super::discord::{SerenityDiscordApi, SerenityResponder};
+use super::discord::{DiscordApi, SerenityDiscordApi, SerenityResponder};
 use super::error::FeatureError;
 use super::feature::Feature;
+use super::http::{HttpConfig, HttpCtx, TrustedProxies, log_request};
 use super::request::{CommandRequest, ComponentRequest, ModalRequest};
 use super::users::UserRepo;
 
 const GENERIC_ERROR: &str = "Something went wrong. Please try again later.";
+
+/// Largest request body any route accepts. A feature can raise it for its own routes.
+const BODY_LIMIT: usize = 32 * 1024;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RegistryError {
@@ -125,6 +132,32 @@ impl FeatureRegistry {
     /// Every feature's slash commands, for `Command::set_global_commands`.
     pub fn commands(&self) -> Vec<CreateCommand> {
         self.features.iter().flat_map(|f| f.commands()).collect()
+    }
+
+    /// One router for every feature's HTTP routes, each nested under
+    /// `<base path>/<namespace>`, plus `<base path>/healthz`.
+    pub fn http_router(&self, discord: Arc<dyn DiscordApi>, config: &HttpConfig) -> Router {
+        let ctx = HttpCtx {
+            discord,
+            users: self.users.clone(),
+        };
+        let mut routes = Router::new().route("/healthz", axum::routing::get(|| async { "ok" }));
+        for feature in &self.features {
+            if let Some(feature_routes) = feature.http_routes(ctx.clone()) {
+                routes = routes.nest(&format!("/{}", feature.namespace()), feature_routes);
+            }
+        }
+        let routes = if config.base_path.is_empty() {
+            routes
+        } else {
+            Router::new().nest(&config.base_path, routes)
+        };
+        routes
+            .layer(DefaultBodyLimit::max(BODY_LIMIT))
+            .layer(Extension(TrustedProxies(
+                config.trusted_proxies.clone().into(),
+            )))
+            .layer(axum::middleware::from_fn(log_request))
     }
 
     pub async fn dispatch(&self, http: Arc<Http>, interaction: Interaction) {
@@ -491,5 +524,60 @@ mod tests {
         registry
             .route_component(&ctx, ComponentRequest::button(UserId::new(1), "ss:x"))
             .await;
+    }
+
+    async fn get(router: &Router, path: &str) -> (u16, String) {
+        use tower::ServiceExt;
+        let request = axum::http::Request::get(path)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        let status = response.status().as_u16();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    fn http_config(base_path: &str) -> HttpConfig {
+        HttpConfig {
+            port: 0,
+            base_path: base_path.into(),
+            trusted_proxies: vec![],
+        }
+    }
+
+    fn with_route(namespace: &'static str) -> MockFeature {
+        let mut feature = feature("F", namespace, &[]);
+        feature.expect_http_routes().returning(|_| {
+            Some(Router::new().route("/", axum::routing::get(|| async { "feature" })))
+        });
+        feature
+    }
+
+    #[tokio::test]
+    async fn http_routes_nest_under_base_path_and_namespace() {
+        let mut without_routes = feature("None", "nr", &[]);
+        without_routes.expect_http_routes().returning(|_| None);
+        let registry = builder()
+            .register(with_route("tell"))
+            .register(without_routes)
+            .build()
+            .unwrap();
+        let router = registry.http_router(Arc::new(MockDiscordApi::new()), &http_config("/jabot"));
+
+        assert_eq!(get(&router, "/jabot/tell").await, (200, "feature".into()));
+        assert_eq!(get(&router, "/jabot/healthz").await, (200, "ok".into()));
+        assert_eq!(get(&router, "/tell").await.0, 404);
+        assert_eq!(get(&router, "/jabot/nr").await.0, 404);
+    }
+
+    #[tokio::test]
+    async fn empty_base_path_serves_from_root() {
+        let registry = builder().register(with_route("tell")).build().unwrap();
+        let router = registry.http_router(Arc::new(MockDiscordApi::new()), &http_config(""));
+
+        assert_eq!(get(&router, "/tell").await, (200, "feature".into()));
+        assert_eq!(get(&router, "/healthz").await, (200, "ok".into()));
     }
 }

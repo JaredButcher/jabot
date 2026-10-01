@@ -3,6 +3,7 @@ use serenity::all::CreateCommand;
 
 use super::context::InteractionCtx;
 use super::error::FeatureError;
+use super::http::HttpCtx;
 use super::request::{CommandRequest, ComponentRequest, ModalRequest};
 
 /// A self-contained bot capability (e.g. Secret Santa). Register it with
@@ -20,6 +21,12 @@ pub trait Feature: Send + Sync {
     /// Top-level slash commands this feature owns. The registry routes by command name.
     fn commands(&self) -> Vec<CreateCommand> {
         vec![]
+    }
+
+    /// HTTP routes this feature serves. The registry nests them under
+    /// `<base path>/<namespace>`, so `.route("/", ..)` in `tell` is served at `/jabot/tell`.
+    fn http_routes(&self, _ctx: HttpCtx) -> Option<axum::Router> {
+        None
     }
 
     async fn on_command(

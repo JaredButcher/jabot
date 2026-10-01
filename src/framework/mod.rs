@@ -5,6 +5,7 @@ mod context;
 mod discord;
 mod error;
 mod feature;
+mod http;
 mod registry;
 mod request;
 mod users;
@@ -13,6 +14,10 @@ pub use context::InteractionCtx;
 pub use discord::{DiscordApi, DiscordError, Responder, SerenityDiscordApi, SerenityResponder};
 pub use error::FeatureError;
 pub use feature::Feature;
+pub use http::{
+    ClientIp, ConfigError, HttpConfig, HttpCtx, TrustedProxies, client_ip, parse_base_path,
+    parse_trusted_proxies, serve,
+};
 pub use registry::{FeatureRegistry, RegistryBuilder, RegistryError};
 pub use request::{CommandRequest, ComponentKind, ComponentRequest, ModalRequest, Options};
 pub use users::{SqliteUserRepo, UserRepo};

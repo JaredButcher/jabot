@@ -3,14 +3,17 @@ use std::fs;
 use std::sync::Arc;
 
 use jabot::features::secret_santa::{SecretSanta, SqliteSecretSantaRepo};
-use jabot::framework::{FeatureRegistry, SqliteUserRepo};
+use jabot::framework::{
+    FeatureRegistry, HttpConfig, SerenityDiscordApi, SqliteUserRepo, parse_base_path,
+    parse_trusted_proxies, serve,
+};
 use serenity::all::{Command, Interaction};
 use serenity::async_trait;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 
 struct Bot {
-    registry: FeatureRegistry,
+    registry: Arc<FeatureRegistry>,
 }
 
 #[async_trait]
@@ -66,6 +69,37 @@ async fn connect_database() -> sqlx::SqlitePool {
     database
 }
 
+/// `HTTP_PORT` enables the HTTP server; `BASE_PATH` and `TRUSTED_PROXIES` configure it.
+fn http_config() -> Option<HttpConfig> {
+    let Ok(port) = env::var("HTTP_PORT") else {
+        tracing::info!("HTTP_PORT not set; HTTP server disabled");
+        return None;
+    };
+    let port = port.trim().parse().expect("Invalid HTTP_PORT");
+    let base_path = env::var("BASE_PATH").unwrap_or_else(|_| "/jabot".to_string());
+    let trusted_proxies = env::var("TRUSTED_PROXIES").unwrap_or_default();
+    Some(HttpConfig {
+        port,
+        base_path: parse_base_path(&base_path).expect("Invalid BASE_PATH"),
+        trusted_proxies: parse_trusted_proxies(&trusted_proxies).expect("Invalid TRUSTED_PROXIES"),
+    })
+}
+
+/// Resolves on Ctrl-C or SIGTERM (what `docker stop` sends).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl-C");
+    };
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("Failed to listen for SIGTERM");
+    tokio::select! {
+        () = ctrl_c => {}
+        _ = sigterm.recv() => {}
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // RUST_LOG overrides the default level, e.g. RUST_LOG=jabot=debug.
@@ -80,6 +114,7 @@ async fn main() {
     };
 
     let token = get_discord_token().expect("Failed to get Discord token");
+    let http_config = http_config();
     let pool = connect_database().await;
 
     let registry = FeatureRegistry::builder(Arc::new(SqliteUserRepo::new(pool.clone())))
@@ -88,15 +123,42 @@ async fn main() {
         ))))
         .build()
         .expect("Feature registration conflict");
+    let registry = Arc::new(registry);
 
     // Interactions (commands, components, modals) arrive without any gateway intents.
     let mut client = Client::builder(&token, GatewayIntents::empty())
-        .event_handler(Bot { registry })
+        .event_handler(Bot {
+            registry: registry.clone(),
+        })
         .await
         .expect("Err creating client");
 
-    if let Err(why) = client.start().await {
-        tracing::error!("Client error: {:?}", why);
+    // HTTP handlers share the client's `Http`, and so its view of Discord's rate limits.
+    let discord = Arc::new(SerenityDiscordApi::new(client.http.clone()));
+    let http_server = async {
+        match &http_config {
+            Some(config) => serve(registry.http_router(discord, config), config.port).await,
+            None => std::future::pending().await,
+        }
+    };
+    let shard_manager = client.shard_manager.clone();
+
+    // Whichever stops first ends the process; under Docker, the restart policy brings it back.
+    tokio::select! {
+        result = client.start() => {
+            if let Err(why) = result {
+                tracing::error!("Client error: {:?}", why);
+            }
+        }
+        result = http_server => {
+            if let Err(error) = result {
+                tracing::error!(%error, "HTTP server failed");
+            }
+        }
+        () = shutdown_signal() => {
+            tracing::info!("Shutting down");
+            shard_manager.shutdown_all().await;
+        }
     }
 }
 
