@@ -17,7 +17,7 @@ pub const DMS_CLOSED: &str = "I couldn't DM you, so tell messages won't reach yo
     curl command.";
 
 // HTTP error messages
-pub const ERR_CONTENT_TYPE: &str = "send the body as JSON, e.g. with curl --json";
+pub const ERR_CONTENT_TYPE: &str = "send the body as JSON, with Content-Type: application/json";
 pub const ERR_BODY: &str =
     "the body must be a JSON object with string fields \"token\" and \"message\"";
 pub const ERR_BODY_TOO_LARGE: &str = "the request body is too large";

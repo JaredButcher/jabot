@@ -23,7 +23,7 @@
 | Question | Decision | Consequence |
 |---|---|---|
 | URL | `POST https://{DOMAIN}/jabot/tell` (and the same path on `LAN_HOST`) | The bot serves everything under `BASE_PATH` (default `/jabot`), so the front proxy forwards `/jabot/*` without rewriting paths |
-| Request body | JSON `{"token": "...", "message": "..."}`; both required | Sent with `curl --json` (curl ≥ 7.82). Responses are JSON too. Phase 2 accepts the same fields as `multipart/form-data`, plus files. No user id and nothing in the query string, so tokens never appear in access logs |
+| Request body | JSON `{"token": "...", "message": "..."}`; both required | Sent with `curl -H 'Content-Type: application/json' -d ...`; not `--json`, which needs curl ≥ 7.82 (Ubuntu 22.04 has 7.81). Responses are JSON too. Phase 2 accepts the same fields as `multipart/form-data`, plus files. No user id and nothing in the query string, so tokens never appear in access logs |
 | Authentication | **Per-user token** that identifies the user | One token per user, stored as-is, because it may be shown again. It stays the same until revoked |
 | Getting the token | `/tell` shows a ready-to-run curl command, creating the token only if the user has none | Same token on every run |
 | Revoking | A **Revoke token** button on the `/tell` reply | The next `/tell` creates a new token. A button left on an old reply can't revoke a newer token |
@@ -46,15 +46,18 @@
 
 ```sh
 curl -sS --fail-with-body https://example.com/jabot/tell \
-     --json '{"token": "tell_9f2c...", "message": "Task finished"}'
+     -H 'Content-Type: application/json' \
+     -d '{"token": "tell_9f2c...", "message": "Task finished"}'
 
 # Shell helper: `long_task; tell "long_task exited with $?"`
 # jq builds the JSON, so quotes, backslashes and newlines in the message are escaped.
 tell() { jq -nc --arg token tell_9f2c... --arg message "${*:-done}" '$ARGS.named' |
-         curl -sS --fail-with-body https://example.com/jabot/tell --json @-; }
+         curl -sS --fail-with-body https://example.com/jabot/tell \
+              -H 'Content-Type: application/json' --data-binary @-; }
 ```
 
-- `--json` sets `Content-Type` and `Accept` to `application/json` and implies `POST`.
+- `-d` implies `POST`; the header makes the server read the body as JSON. `--data-binary @-`
+  sends jq's output unchanged.
 - A message pasted into the literal JSON has to be valid JSON, so `"` and `\` need escaping.
   The `jq` helper does that for any text, including shell variables. `/tell` shows both forms.
 
@@ -76,7 +79,7 @@ revoke a newer token. Pressing it then says that token was already revoked.
 |---|---|---|
 | DM sent | `204 No Content` | |
 | Not `POST` | `405` | |
-| `Content-Type` not `application/json` | `415` | `send the body with curl --json` |
+| `Content-Type` not `application/json` | `415` | `send the body as JSON, with Content-Type: application/json` |
 | Body not valid JSON, or a field isn't a string | `400` | |
 | `token` missing or unknown | `401` | `invalid token` |
 | `message` missing or blank | `400` | the reason |

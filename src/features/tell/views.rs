@@ -21,12 +21,13 @@ pub fn tell_reply(config: &TellConfig, token: &StoredToken) -> CreateInteraction
          Send yourself a message:\n\
          ```sh\n\
          curl -sS --fail-with-body {url} \\\n     \
-         --json '{{\"token\": \"{token_value}\", \"message\": \"Task finished\"}}'\n\
+         -H 'Content-Type: application/json' \\\n     \
+         -d '{{\"token\": \"{token_value}\", \"message\": \"Task finished\"}}'\n\
          ```\n\
          Shell helper (needs `jq`), e.g. `long_task; tell \"long_task exited with $?\"`:\n\
          ```sh\n\
          tell() {{ jq -nc --arg token {token_value} --arg message \"${{*:-done}}\" '$ARGS.named' | \
-         curl -sS --fail-with-body {url} --json @-; }}\n\
+         curl -sS --fail-with-body {url} -H 'Content-Type: application/json' --data-binary @-; }}\n\
          ```"
     );
     if let Some(lan_url) = &config.lan_url {

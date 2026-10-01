@@ -29,10 +29,11 @@ Can be run with without enviroment files. Though `.env` should be used.
 
 ```sh
 long_task; curl -sS --fail-with-body https://example.com/jabot/tell \
-     --json '{"token": "tell_...", "message": "long_task finished"}'
+     -H 'Content-Type: application/json' \
+     -d '{"token": "tell_...", "message": "long_task finished"}'
 ```
 
-`--json` needs curl 7.82 or newer. On older curl, use `-H 'Content-Type: application/json' -d '...'` instead.
+The commands avoid curl's `--json` shorthand, which needs curl 7.82 or newer.
 
 Responses are JSON. `204` means the DM was sent. Errors look like `{"error": "..."}`: `401` for a bad token, `400`/`413` for a missing or over-2000-character message, `422` if Discord won't let the bot DM you, and `429` (with `Retry-After`) when rate limited. Each user may send bursts of 5, then 5 a minute.
 
