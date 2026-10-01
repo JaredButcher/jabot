@@ -17,7 +17,7 @@ pub fn tell_reply(config: &TellConfig, token: &StoredToken) -> CreateInteraction
     let mut content = format!(
         "Send yourself a message:\n\
          ```sh\n\
-         curl -fsS {url} \\\n -H 'Content-Type: application/json' -d '{{\"token\": \"{token_value}\", \"message\": \"Task finished\"}}'\n\
+         curl -fsS {url} -H 'Content-Type: application/json' -d '{{\"token\": \"{token_value}\", \"message\": \"Task finished\"}}'\n\
          ```\n\
 	"
     );
