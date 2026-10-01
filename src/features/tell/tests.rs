@@ -118,13 +118,13 @@ Anyone with it can DM you through me, so keep it private.
 
 Send yourself a message:
 ```sh
-curl -sS --fail-with-body https://example.com/jabot/tell \
+curl -fsS https://example.com/jabot/tell \
      -H 'Content-Type: application/json' \
      -d '{"token": "tell_abc", "message": "Task finished"}'
 ```
 Shell helper (needs `jq`), e.g. `long_task; tell "long_task exited with $?"`:
 ```sh
-tell() { jq -nc --arg token tell_abc --arg message "${*:-done}" '$ARGS.named' | curl -sS --fail-with-body https://example.com/jabot/tell -H 'Content-Type: application/json' --data-binary @-; }
+tell() { jq -nc --arg token tell_abc --arg message "${*:-done}" '$ARGS.named' | curl -fsS https://example.com/jabot/tell -H 'Content-Type: application/json' --data-binary @-; }
 ```"#
     );
 }

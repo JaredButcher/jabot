@@ -28,12 +28,12 @@ Can be run with without enviroment files. Though `.env` should be used.
 `/tell` replies (only to you) with a token and a ready-to-run `curl` command. Running it again shows the same token until you press **Revoke token**. Sending a request with the token DMs you the message, e.g. at the end of a long task:
 
 ```sh
-long_task; curl -sS --fail-with-body https://example.com/jabot/tell \
+long_task; curl -fsS https://example.com/jabot/tell \
      -H 'Content-Type: application/json' \
      -d '{"token": "tell_...", "message": "long_task finished"}'
 ```
 
-The commands avoid curl's `--json` shorthand, which needs curl 7.82 or newer.
+The commands avoid newer curl options (`--json` needs 7.82, `--fail-with-body` 7.76). With `-f`, a failed request makes curl exit non-zero and print only the HTTP status; drop `-f` to see the JSON error instead.
 
 Responses are JSON. `204` means the DM was sent. Errors look like `{"error": "..."}`: `401` for a bad token, `400`/`413` for a missing or over-2000-character message, `422` if Discord won't let the bot DM you, and `429` (with `Retry-After`) when rate limited. Each user may send bursts of 5, then 5 a minute.
 

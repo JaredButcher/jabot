@@ -45,14 +45,14 @@
 - a **Revoke token** button.
 
 ```sh
-curl -sS --fail-with-body https://example.com/jabot/tell \
+curl -fsS https://example.com/jabot/tell \
      -H 'Content-Type: application/json' \
      -d '{"token": "tell_9f2c...", "message": "Task finished"}'
 
 # Shell helper: `long_task; tell "long_task exited with $?"`
 # jq builds the JSON, so quotes, backslashes and newlines in the message are escaped.
 tell() { jq -nc --arg token tell_9f2c... --arg message "${*:-done}" '$ARGS.named' |
-         curl -sS --fail-with-body https://example.com/jabot/tell \
+         curl -fsS https://example.com/jabot/tell \
               -H 'Content-Type: application/json' --data-binary @-; }
 ```
 
@@ -90,7 +90,8 @@ revoke a newer token. Pressing it then says that token was already revoked.
 | Other Discord failure | `502` | logged |
 
 - Error bodies are `{"error": "<reason>"}`, and a `429` adds `"retry_after": <seconds>`.
-  `curl --fail-with-body` prints them.
+  With `-f`, curl prints only the status (`--fail-with-body` would print the body, but needs
+  curl 7.76); without `-f` it prints the body but exits 0.
 - Logs record user id, client IP and outcome, never the token or message text.
 
 ### Rate limits
