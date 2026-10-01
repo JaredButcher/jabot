@@ -23,6 +23,7 @@ After a migration changes, run `sqlx migrate run` before `cargo build`, or the `
 - **Run with explicit env**: `DATABASE_URL=sqlite:database.sqlite DISCORD_TOKEN_FILE=... cargo run`
 - **Test**: `cargo test` (`#[sqlx::test]` tests create their own throwaway databases under `target/sqlx/`)
 - **Lint**: `cargo clippy --all-targets`
+- **Deploy** (on the server): `./deploy.sh` builds a release binary, stops the `jabot` service, installs the binary over its `ExecStart` path and starts it again
 
 ## Environment Variables
 
