@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO ss_participants (user_id, event_id) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c4bb1474b726c02950170aa64937ef8ec880e60d6d59b0f8701eac502dbde0d7"
+}

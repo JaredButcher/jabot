@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE ss_participants SET assignee_id = ? WHERE event_id = ? AND user_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "40e804d4627b768bda8cef09ff4709889aca254b3cb29b0fe0094ff0f0b82ba1"
+}

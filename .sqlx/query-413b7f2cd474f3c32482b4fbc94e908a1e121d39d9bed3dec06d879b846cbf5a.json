@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM tell_tokens WHERE id = ? AND user_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "413b7f2cd474f3c32482b4fbc94e908a1e121d39d9bed3dec06d879b846cbf5a"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO tell_tokens (user_id, token) VALUES (?, ?) ON CONFLICT (user_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "bb5b5a434b8d6a1467004d41ec994bf915ce4dc90bf5dae6369624b98e415e66"
+}

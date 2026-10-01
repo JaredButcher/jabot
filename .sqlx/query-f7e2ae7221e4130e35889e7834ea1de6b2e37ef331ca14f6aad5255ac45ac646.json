@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE ss_events SET status = ? WHERE id = ? AND status = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "f7e2ae7221e4130e35889e7834ea1de6b2e37ef331ca14f6aad5255ac45ac646"
+}
