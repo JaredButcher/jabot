@@ -13,8 +13,8 @@ use super::repo::MockSecretSantaRepo;
 use super::{SecretSanta, components, text};
 use crate::framework::testing::{any_users, content, ctx, followup_content, is_ephemeral, json};
 use crate::framework::{
-    CommandRequest, ComponentRequest, Feature, FeatureError, InteractionCtx, MockDiscordApi,
-    MockResponder, MockUserRepo, ModalRequest,
+    CommandRequest, ComponentRequest, DmError, Feature, FeatureError, InteractionCtx,
+    MockDiscordApi, MockResponder, MockUserRepo, ModalRequest,
 };
 use serenity::all::CommandDataOptionValue;
 
@@ -273,7 +273,7 @@ async fn failed_dm_is_reported_and_others_still_notified() {
     let mut discord = MockDiscordApi::new();
     discord.expect_send_dm().times(3).returning(move |to, _| {
         if to == user(2) {
-            return Err(serenity::Error::Other("Cannot send messages to this user"));
+            return Err(DmError::Closed);
         }
         log.lock().unwrap().push(to);
         Ok(())

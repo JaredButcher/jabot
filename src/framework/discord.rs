@@ -9,8 +9,34 @@ use serenity::all::{
     InteractionId, UserId,
 };
 use serenity::builder::Builder;
+use serenity::http::HttpError;
 
 pub type DiscordError = serenity::Error;
+
+/// Discord's error code for "Cannot send messages to this user": the user has DMs from server
+/// members turned off, or shares no server with the bot.
+const CANNOT_MESSAGE_USER: isize = 50007;
+
+#[derive(Debug, thiserror::Error)]
+pub enum DmError {
+    #[error("the user doesn't accept DMs from the bot")]
+    Closed,
+    #[error(transparent)]
+    Discord(DiscordError),
+}
+
+impl From<DiscordError> for DmError {
+    fn from(error: DiscordError) -> Self {
+        match &error {
+            serenity::Error::Http(HttpError::UnsuccessfulRequest(response))
+                if response.error.code == CANNOT_MESSAGE_USER =>
+            {
+                DmError::Closed
+            }
+            _ => DmError::Discord(error),
+        }
+    }
+}
 
 /// Replies to the one interaction being handled.
 #[cfg_attr(test, mockall::automock)]
@@ -30,7 +56,7 @@ pub trait Responder: Send + Sync {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait DiscordApi: Send + Sync {
-    async fn send_dm(&self, user: UserId, content: String) -> Result<(), DiscordError>;
+    async fn send_dm(&self, user: UserId, content: String) -> Result<(), DmError>;
     async fn user_name(&self, user: UserId) -> Result<String, DiscordError>;
 }
 
@@ -85,7 +111,7 @@ impl SerenityDiscordApi {
 
 #[async_trait]
 impl DiscordApi for SerenityDiscordApi {
-    async fn send_dm(&self, user: UserId, content: String) -> Result<(), DiscordError> {
+    async fn send_dm(&self, user: UserId, content: String) -> Result<(), DmError> {
         user.direct_message(&self.http, CreateMessage::new().content(content))
             .await?;
         Ok(())

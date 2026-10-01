@@ -11,7 +11,9 @@ mod request;
 mod users;
 
 pub use context::InteractionCtx;
-pub use discord::{DiscordApi, DiscordError, Responder, SerenityDiscordApi, SerenityResponder};
+pub use discord::{
+    DiscordApi, DiscordError, DmError, Responder, SerenityDiscordApi, SerenityResponder,
+};
 pub use error::FeatureError;
 pub use feature::Feature;
 pub use http::{
