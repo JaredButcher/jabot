@@ -3,6 +3,7 @@ use std::fs;
 use std::sync::Arc;
 
 use jabot::features::secret_santa::{SecretSanta, SqliteSecretSantaRepo};
+use jabot::features::tell::{SqliteTellRepo, Tell, TellConfig};
 use jabot::framework::{
     FeatureRegistry, HttpConfig, SerenityDiscordApi, SqliteUserRepo, parse_base_path,
     parse_trusted_proxies, serve,
@@ -85,6 +86,22 @@ fn http_config() -> Option<HttpConfig> {
     })
 }
 
+/// The URLs `/tell` prints: `https://<DOMAIN><base path>/tell`, and the same under `LAN_HOST`.
+/// Without `DOMAIN` (local dev), the bot's own port on localhost.
+fn tell_config(http: &HttpConfig) -> TellConfig {
+    let url_for = |host: String| format!("https://{host}{}/tell", http.base_path);
+    let url = env::var("DOMAIN")
+        .ok()
+        .filter(|domain| !domain.is_empty())
+        .map(url_for)
+        .unwrap_or_else(|| format!("http://localhost:{}{}/tell", http.port, http.base_path));
+    let lan_url = env::var("LAN_HOST")
+        .ok()
+        .filter(|host| !host.is_empty())
+        .map(url_for);
+    TellConfig { url, lan_url }
+}
+
 /// Resolves on Ctrl-C or SIGTERM (what `docker stop` sends).
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -117,12 +134,18 @@ async fn main() {
     let http_config = http_config();
     let pool = connect_database().await;
 
-    let registry = FeatureRegistry::builder(Arc::new(SqliteUserRepo::new(pool.clone())))
+    let mut registry = FeatureRegistry::builder(Arc::new(SqliteUserRepo::new(pool.clone())))
         .register(SecretSanta::new(Arc::new(SqliteSecretSantaRepo::new(
             pool.clone(),
-        ))))
-        .build()
-        .expect("Feature registration conflict");
+        ))));
+    // tell is only useful with the HTTP server it receives requests on.
+    if let Some(http) = &http_config {
+        registry = registry.register(Tell::new(
+            Arc::new(SqliteTellRepo::new(pool.clone())),
+            tell_config(http),
+        ));
+    }
+    let registry = registry.build().expect("Feature registration conflict");
     let registry = Arc::new(registry);
 
     // Interactions (commands, components, modals) arrive without any gateway intents.
