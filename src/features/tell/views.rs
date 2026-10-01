@@ -15,20 +15,11 @@ pub fn tell_reply(config: &TellConfig, token: &StoredToken) -> CreateInteraction
     let url = &config.url;
     let token_value = &token.token;
     let mut content = format!(
-        "Your tell token: `{token_value}`\n\
-         Anyone with it can DM you through me, so keep it private.\n\
-         \n\
-         Send yourself a message:\n\
+        "Send yourself a message:\n\
          ```sh\n\
-         curl -fsS {url} \\\n     \
-         -H 'Content-Type: application/json' \\\n     \
-         -d '{{\"token\": \"{token_value}\", \"message\": \"Task finished\"}}'\n\
+         curl -fsS {url} \\\n -H 'Content-Type: application/json' -d '{{\"token\": \"{token_value}\", \"message\": \"Task finished\"}}'\n\
          ```\n\
-         Shell helper (needs `jq`), e.g. `long_task; tell \"long_task exited with $?\"`:\n\
-         ```sh\n\
-         tell() {{ jq -nc --arg token {token_value} --arg message \"${{*:-done}}\" '$ARGS.named' | \
-         curl -fsS {url} -H 'Content-Type: application/json' --data-binary @-; }}\n\
-         ```"
+	"
     );
     if let Some(lan_url) = &config.lan_url {
         content.push_str(&format!("\nOn the LAN, use {lan_url} instead."));
