@@ -4,8 +4,11 @@
 mod commands;
 mod components;
 mod custom_id;
+mod http;
 mod model;
+mod rate_limit;
 mod repo;
+mod service;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -17,9 +20,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serenity::all::CreateCommand;
 
-use crate::framework::{CommandRequest, ComponentRequest, Feature, FeatureError, InteractionCtx};
+use crate::framework::{
+    CommandRequest, ComponentRequest, Feature, FeatureError, HttpCtx, InteractionCtx,
+};
 use custom_id::TellId;
 pub use repo::{SqliteTellRepo, TellRepo};
+use service::TellService;
 
 /// Where the bot is reachable, for the commands `/tell` prints.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,11 +39,17 @@ pub struct TellConfig {
 pub struct Tell {
     repo: Arc<dyn TellRepo>,
     config: TellConfig,
+    /// Shared with the HTTP handler; holds the rate limits.
+    service: Arc<TellService>,
 }
 
 impl Tell {
     pub fn new(repo: Arc<dyn TellRepo>, config: TellConfig) -> Self {
-        Self { repo, config }
+        Self {
+            service: Arc::new(TellService::new(repo.clone())),
+            repo,
+            config,
+        }
     }
 }
 
@@ -53,6 +65,10 @@ impl Feature for Tell {
 
     fn commands(&self) -> Vec<CreateCommand> {
         vec![commands::tell_command()]
+    }
+
+    fn http_routes(&self, ctx: HttpCtx) -> Option<axum::Router> {
+        Some(http::routes(self.service.clone(), ctx.discord))
     }
 
     async fn on_command(

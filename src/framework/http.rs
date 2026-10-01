@@ -112,8 +112,11 @@ pub struct ClientIp(pub IpAddr);
 impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
     type Rejection = StatusCode;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<SocketAddr>>() else {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // The extractor (rather than the raw extension) also finds MockConnectInfo in tests.
+        let Ok(ConnectInfo(peer)) =
+            ConnectInfo::<SocketAddr>::from_request_parts(parts, state).await
+        else {
             tracing::error!("ClientIp used on a server without connect info");
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         };
