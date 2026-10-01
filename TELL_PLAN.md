@@ -1,5 +1,7 @@
 # JABot Plan: `tell` Feature and Docker Deployment
 
+**Status:** implemented on `feature/tell` (steps 1–8 and 10). Step 9, the cutover on the Pi, is still to do.
+
 ## Goals
 
 1. **`tell`**: an HTTPS endpoint that DMs a Discord user. The main use is a `curl` at the end of
@@ -123,7 +125,7 @@ refill period.
 2. Otherwise, walk `X-Forwarded-For` from right to left, skipping trusted addresses. The first
    untrusted address is the client. Proxies append to the header, so entries a client forged
    sit to the left of this one and are never reached.
-3. If every entry is trusted, or there is no header, the peer is the client.
+3. If the header runs out (or an entry isn't an IP) while the current address is still trusted, that last trusted address is the client: the peer if there's no header, otherwise the leftmost trusted hop.
 
 With `TRUSTED_PROXIES` empty (the default), the header is never used. That is the right
 setting until the front proxy exists, and for local dev.
@@ -157,9 +159,9 @@ pub struct HttpConfig {
     pub trusted_proxies: Vec<IpNet>,
 }
 
-/// Bind 0.0.0.0:`port` and serve until `shutdown` resolves. Uses
-/// `into_make_service_with_connect_info::<SocketAddr>()` so handlers see the peer address.
-pub async fn serve(router: Router, port: u16, shutdown: impl Future<Output = ()>) -> io::Result<()>;
+/// Bind 0.0.0.0:`port` and serve until the process exits (main's `select!` handles SIGTERM).
+/// Uses `into_make_service_with_connect_info::<SocketAddr>()` so handlers see the peer address.
+pub async fn serve(router: Router, port: u16) -> io::Result<()>;
 
 /// The client IP, following the rules in "Client IP".
 pub fn client_ip(headers: &HeaderMap, peer: SocketAddr, trusted: &[IpNet]) -> IpAddr;
@@ -300,7 +302,7 @@ compose.yaml
 ### Dockerfile (multi-stage)
 
 ```dockerfile
-FROM rust:1.98-slim-bookworm AS build
+FROM rust:1.98-slim-trixie AS build
 WORKDIR /src
 COPY . .
 ENV SQLX_OFFLINE=true
@@ -308,7 +310,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked && cp target/release/jabot /jabot
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --home /data jabot \
@@ -478,8 +480,8 @@ Each step compiles and passes `cargo test`, and gets its own commit.
 6. **`tell` HTTP.** Add `TellService::deliver` with the three buckets, the handler and the
    error mapping.
 7. **sqlx offline data.** Run `cargo sqlx prepare -- --all-targets` and commit `.sqlx/`.
-   - The local sqlx-cli is 0.9 but the library is 0.8. Install a matching CLI first
-     (`cargo install sqlx-cli --version '^0.8' --no-default-features --features sqlite,rustls`).
+   - The local sqlx-cli is 0.9 but the library is 0.8. That works: the CLI only runs the build,
+     and the 0.8 macros write the query files.
    - CLAUDE.md: rerun `prepare` after changing a query.
 8. **Docker.** Add `Dockerfile`, `.dockerignore`, `compose.yaml` and `.env.example`, and
    smoke-test locally.
