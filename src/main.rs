@@ -131,12 +131,6 @@ async fn main() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    // Try to load .env file if it exists
-    match dotenv::dotenv() {
-        Ok(_) => tracing::info!("Loaded .env file"),
-        Err(err) => tracing::info!("No .env file loaded: {}", err),
-    };
-
     let token = get_discord_token().expect("Failed to get Discord token");
     let http_config = http_config();
     let pool = connect_database().await;
