@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use serenity::all::{
-    CreateInteractionResponse, CreateInteractionResponseFollowup, CreateMessage, Http,
+    ChannelId, CreateInteractionResponse, CreateInteractionResponseFollowup, CreateMessage, Http,
     InteractionId, UserId,
 };
 use serenity::builder::Builder;
@@ -58,6 +58,13 @@ pub trait Responder: Send + Sync {
 pub trait DiscordApi: Send + Sync {
     async fn send_dm(&self, user: UserId, content: String) -> Result<(), DmError>;
     async fn user_name(&self, user: UserId) -> Result<String, DiscordError>;
+    /// The DM channel with `user`, creating it if needed. Doesn't check that the user accepts
+    /// DMs; sending to it does.
+    async fn dm_channel(&self, user: UserId) -> Result<ChannelId, DiscordError>;
+    /// Send `message` to `channel`. `DmError::Closed` if it's a DM channel whose user doesn't
+    /// accept DMs from the bot.
+    async fn send_message(&self, channel: ChannelId, message: CreateMessage)
+    -> Result<(), DmError>;
 }
 
 pub struct SerenityResponder {
@@ -119,5 +126,18 @@ impl DiscordApi for SerenityDiscordApi {
 
     async fn user_name(&self, user: UserId) -> Result<String, DiscordError> {
         Ok(user.to_user(&self.http).await?.name)
+    }
+
+    async fn dm_channel(&self, user: UserId) -> Result<ChannelId, DiscordError> {
+        Ok(user.create_dm_channel(&self.http).await?.id)
+    }
+
+    async fn send_message(
+        &self,
+        channel: ChannelId,
+        message: CreateMessage,
+    ) -> Result<(), DmError> {
+        channel.send_message(&self.http, message).await?;
+        Ok(())
     }
 }
