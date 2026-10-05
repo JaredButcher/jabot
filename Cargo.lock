@@ -1148,6 +1148,7 @@ dependencies = [
  "serde_json",
  "serenity",
  "sqlx",
+ "tempfile",
  "thiserror 2.0.16",
  "tokio",
  "tower",
