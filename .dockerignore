@@ -6,3 +6,5 @@ target/
 *.sqlite-wal
 data/
 secrets/
+backup/
+backups/

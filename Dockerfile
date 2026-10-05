@@ -10,7 +10,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked && cp target/release/jabot /jabot
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+# restic uploads the daily database backups (src/backup); trixie ships 0.18.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates restic \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --home /data jabot \
  && mkdir /data && chown jabot:jabot /data

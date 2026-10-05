@@ -14,6 +14,15 @@ services:
       DOMAIN: ${DOMAIN:-}
       LAN_HOST: ${LAN_HOST:-}
       RUST_LOG: ${RUST_LOG:-info}
+      # Daily backups with restic (src/backup); unset RESTIC_REPOSITORY disables them.
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+      AWS_SHARED_CREDENTIALS_FILE: /run/secrets/b2_credentials
+      RESTIC_COMPRESSION: max
+      # The container's user has no home directory, so restic needs an explicit cache.
+      RESTIC_CACHE_DIR: /data/.cache/restic
+      BACKUP_TIME_UTC: ${BACKUP_TIME_UTC:-08:00}
+      BOT_OWNER_ID: ${BOT_OWNER_ID:-}
     ports:
       # Loopback by default: reachable by a proxy on this machine, not from the network.
       - "${HTTP_PUBLISH:-127.0.0.1}:${HTTP_PORT:-8080}:${HTTP_PORT:-8080}"
@@ -22,6 +31,8 @@ services:
       - ./data:/data
     secrets:
       - discord_token
+      - restic_password
+      - b2_credentials
     user: "${JABOT_UID}:${JABOT_GID}"
 
 networks:
@@ -36,3 +47,11 @@ secrets:
   discord_token:
     # Must be readable by jabot user or group
     file: ./secretes/discord_token
+  # Backups. Both files must exist even with backups off (empty is fine), and be readable
+  # by the jabot user. Keep copies of both in a password manager: without the password, the
+  # backups can't be decrypted.
+  restic_password:
+    file: ./secrets/restic_password
+  b2_credentials:
+    # AWS-style credentials file holding the B2 application key (README, "Backups").
+    file: ./secrets/b2_credentials
