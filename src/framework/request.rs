@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use serenity::all::{
     ActionRowComponent, CommandDataOption, CommandDataOptionValue, CommandInteraction,
-    ComponentInteraction, ComponentInteractionDataKind, GuildId, ModalInteraction, UserId,
+    ComponentInteraction, ComponentInteractionDataKind, GuildId, InteractionContext,
+    ModalInteraction, UserId,
 };
 
 /// A slash command invocation, with subcommands already unwrapped.
@@ -13,6 +14,8 @@ use serenity::all::{
 pub struct CommandRequest {
     pub user: UserId,
     pub guild: Option<GuildId>,
+    /// Where the command was used: a server, the bot's DM, or another private channel.
+    pub context: Option<InteractionContext>,
     /// Top-level command name, e.g. `ss`.
     pub command: String,
     /// Subcommand group name, if the command uses groups.
@@ -28,6 +31,7 @@ impl CommandRequest {
         Self {
             user,
             guild: None,
+            context: None,
             command: command.into(),
             group: None,
             subcommand: None,
@@ -37,6 +41,11 @@ impl CommandRequest {
 
     pub fn subcommand(mut self, name: impl Into<String>) -> Self {
         self.subcommand = Some(name.into());
+        self
+    }
+
+    pub fn context(mut self, context: InteractionContext) -> Self {
+        self.context = Some(context);
         self
     }
 
@@ -52,6 +61,7 @@ impl From<&CommandInteraction> for CommandRequest {
         Self {
             user: command.user.id,
             guild: command.guild_id,
+            context: command.context,
             command: command.data.name.clone(),
             group,
             subcommand,
@@ -270,5 +280,15 @@ mod tests {
 
         assert_eq!(req.subcommand, None);
         assert_eq!(req.options.i64("count"), Some(2));
+    }
+
+    #[test]
+    fn keeps_interaction_context() {
+        let mut interaction = command(serde_json::json!({ "id": "3", "name": "ping", "type": 1 }));
+        interaction.context = Some(InteractionContext::BotDm);
+
+        let req = CommandRequest::from(&interaction);
+
+        assert_eq!(req.context, Some(InteractionContext::BotDm));
     }
 }
