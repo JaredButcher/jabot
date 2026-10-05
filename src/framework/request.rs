@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 
 use serenity::all::{
-    ActionRowComponent, CommandDataOption, CommandDataOptionValue, CommandInteraction,
-    ComponentInteraction, ComponentInteractionDataKind, GuildId, InteractionContext,
-    ModalInteraction, UserId,
+    ActionRowComponent, ChannelId, CommandDataOption, CommandDataOptionValue, CommandInteraction,
+    ComponentInteraction, ComponentInteractionDataKind, GuildId, InteractionContext, Message,
+    MessageType, ModalInteraction, UserId,
 };
 
 /// A slash command invocation, with subcommands already unwrapped.
@@ -218,6 +218,50 @@ impl From<&ModalInteraction> for ModalRequest {
     }
 }
 
+/// A message a user sent. Messages from bots and system messages (joins, pins, ...) never
+/// become one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRequest {
+    pub author: UserId,
+    pub channel: ChannelId,
+    /// `None` for a DM to the bot.
+    pub guild: Option<GuildId>,
+    /// The text as typed, Markdown included.
+    pub content: String,
+    /// Attachments and stickers the message carried. Their content isn't kept. Embeds don't
+    /// count, since Discord adds them to plain links.
+    pub extras: usize,
+}
+
+impl MessageRequest {
+    /// A DM from `author` with only text.
+    pub fn dm(author: UserId, channel: ChannelId, content: impl Into<String>) -> Self {
+        Self {
+            author,
+            channel,
+            guild: None,
+            content: content.into(),
+            extras: 0,
+        }
+    }
+
+    /// `None` for messages from bots (including this one) and system messages.
+    pub fn from_message(message: &Message) -> Option<Self> {
+        let from_user = !message.author.bot && !message.author.system;
+        let regular = matches!(
+            message.kind,
+            MessageType::Regular | MessageType::InlineReply
+        );
+        (from_user && regular).then(|| Self {
+            author: message.author.id,
+            channel: message.channel_id,
+            guild: message.guild_id,
+            content: message.content.clone(),
+            extras: message.attachments.len() + message.sticker_items.len(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +334,50 @@ mod tests {
         let req = CommandRequest::from(&interaction);
 
         assert_eq!(req.context, Some(InteractionContext::BotDm));
+    }
+
+    fn message(author: serde_json::Value, kind: u8) -> Message {
+        serde_json::from_value(serde_json::json!({
+            "id": "1", "channel_id": "5", "author": author, "content": "**hi**",
+            "timestamp": "2026-10-05T12:00:00Z", "edited_timestamp": null, "tts": false,
+            "mention_everyone": false, "mentions": [], "mention_roles": [], "pinned": false,
+            "embeds": [], "type": kind,
+            "attachments": [{
+                "id": "9", "filename": "a.png", "size": 1, "url": "u", "proxy_url": "p"
+            }],
+        }))
+        .unwrap()
+    }
+
+    fn user(bot: bool) -> serde_json::Value {
+        serde_json::json!({ "id": "42", "username": "u", "discriminator": "0", "bot": bot })
+    }
+
+    #[test]
+    fn converts_a_user_message() {
+        let req = MessageRequest::from_message(&message(user(false), 0)).unwrap();
+
+        assert_eq!(
+            req,
+            MessageRequest {
+                author: UserId::new(42),
+                channel: ChannelId::new(5),
+                guild: None,
+                content: "**hi**".into(),
+                extras: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn keeps_replies() {
+        assert!(MessageRequest::from_message(&message(user(false), 19)).is_some());
+    }
+
+    #[test]
+    fn skips_bots_and_system_messages() {
+        assert_eq!(MessageRequest::from_message(&message(user(true), 0)), None);
+        // 6: "pinned a message"
+        assert_eq!(MessageRequest::from_message(&message(user(false), 6)), None);
     }
 }

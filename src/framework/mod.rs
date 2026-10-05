@@ -10,7 +10,7 @@ mod registry;
 mod request;
 mod users;
 
-pub use context::InteractionCtx;
+pub use context::{InteractionCtx, MessageCtx};
 pub use discord::{
     DiscordApi, DiscordError, DmError, Responder, SerenityDiscordApi, SerenityResponder,
 };
@@ -21,7 +21,9 @@ pub use http::{
     parse_trusted_proxies, serve,
 };
 pub use registry::{FeatureRegistry, RegistryBuilder, RegistryError};
-pub use request::{CommandRequest, ComponentKind, ComponentRequest, ModalRequest, Options};
+pub use request::{
+    CommandRequest, ComponentKind, ComponentRequest, MessageRequest, ModalRequest, Options,
+};
 pub use users::{SqliteUserRepo, UserRepo};
 
 #[cfg(test)]
@@ -38,7 +40,7 @@ pub mod testing {
 
     use serenity::all::{CreateInteractionResponse, CreateInteractionResponseFollowup};
 
-    use super::{InteractionCtx, MockDiscordApi, MockResponder, MockUserRepo};
+    use super::{InteractionCtx, MessageCtx, MockDiscordApi, MockResponder, MockUserRepo};
 
     pub fn ctx(
         responder: MockResponder,
@@ -49,6 +51,13 @@ pub mod testing {
             responder: Arc::new(responder),
             discord: Arc::new(discord),
             users: Arc::new(users),
+        }
+    }
+
+    pub fn message_ctx(discord: MockDiscordApi) -> MessageCtx {
+        MessageCtx {
+            discord: Arc::new(discord),
+            users: Arc::new(MockUserRepo::new()),
         }
     }
 

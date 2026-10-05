@@ -2,19 +2,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serenity::all::{
-    CreateCommand, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, Http, Interaction, InteractionId, UserId,
+    ChannelId, CreateCommand, CreateInteractionResponse, CreateInteractionResponseFollowup,
+    CreateInteractionResponseMessage, CreateMessage, GatewayIntents, Http, Interaction,
+    InteractionId, Message, UserId,
 };
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Extension};
 
-use super::context::InteractionCtx;
+use super::context::{InteractionCtx, MessageCtx};
 use super::discord::{DiscordApi, SerenityDiscordApi, SerenityResponder};
 use super::error::FeatureError;
 use super::feature::Feature;
 use super::http::{HttpConfig, HttpCtx, TrustedProxies, log_request};
-use super::request::{CommandRequest, ComponentRequest, ModalRequest};
+use super::request::{CommandRequest, ComponentRequest, MessageRequest, ModalRequest};
 use super::users::UserRepo;
 
 const GENERIC_ERROR: &str = "Something went wrong. Please try again later.";
@@ -134,6 +135,13 @@ impl FeatureRegistry {
         self.features.iter().flat_map(|f| f.commands()).collect()
     }
 
+    /// Gateway intents to connect with: the union of every feature's.
+    pub fn intents(&self) -> GatewayIntents {
+        self.features
+            .iter()
+            .fold(GatewayIntents::empty(), |all, f| all | f.intents())
+    }
+
     /// One router for every feature's HTTP routes, each nested under
     /// `<base path>/<namespace>`, plus `<base path>/healthz`.
     pub fn http_router(&self, discord: Arc<dyn DiscordApi>, config: &HttpConfig) -> Router {
@@ -177,6 +185,36 @@ impl FeatureRegistry {
                 self.route_modal(&ctx, ModalRequest::from(&modal)).await;
             }
             other => tracing::debug!(kind = ?other.kind(), "ignoring interaction"),
+        }
+    }
+
+    /// Pass a user's message to every feature whose intents cover where it was sent.
+    pub async fn dispatch_message(&self, http: Arc<Http>, message: &Message) {
+        let Some(req) = MessageRequest::from_message(message) else {
+            return;
+        };
+        let ctx = MessageCtx {
+            discord: Arc::new(SerenityDiscordApi::new(http)),
+            users: self.users.clone(),
+        };
+        self.route_message(&ctx, req).await;
+    }
+
+    /// No `users.ensure` here: that would be a database write for every message.
+    async fn route_message(&self, ctx: &MessageCtx, req: MessageRequest) {
+        let wanted = if req.guild.is_some() {
+            GatewayIntents::GUILD_MESSAGES
+        } else {
+            GatewayIntents::DIRECT_MESSAGES
+        };
+        for feature in self
+            .features
+            .iter()
+            .filter(|f| f.intents().contains(wanted))
+        {
+            let channel = req.channel;
+            let result = feature.on_message(ctx, req.clone()).await;
+            finish_message(ctx, feature.name(), channel, result).await;
         }
     }
 
@@ -272,10 +310,31 @@ async fn finish(ctx: &InteractionCtx, feature: &str, result: Result<(), FeatureE
     }
 }
 
+/// Turn a message handler's error into a reply in the message's channel.
+async fn finish_message(
+    ctx: &MessageCtx,
+    feature: &str,
+    channel: ChannelId,
+    result: Result<(), FeatureError>,
+) {
+    let content = match result {
+        Ok(()) => return,
+        Err(FeatureError::User(message)) => message,
+        Err(FeatureError::Internal(error)) => {
+            tracing::error!(feature, %error, "message handler failed");
+            GENERIC_ERROR.to_string()
+        }
+    };
+    let reply = CreateMessage::new().content(content);
+    if let Err(error) = ctx.discord.send_message(channel, reply).await {
+        tracing::error!(feature, %error, "could not send error reply");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framework::testing::{any_users, content, ctx, followup_content};
+    use crate::framework::testing::{any_users, content, ctx, followup_content, message_ctx};
     use crate::framework::{MockDiscordApi, MockFeature, MockResponder, MockUserRepo};
     use mockall::Sequence;
 
@@ -524,6 +583,103 @@ mod tests {
         registry
             .route_component(&ctx, ComponentRequest::button(UserId::new(1), "ss:x"))
             .await;
+    }
+
+    fn listening(
+        name: &'static str,
+        namespace: &'static str,
+        intents: GatewayIntents,
+    ) -> MockFeature {
+        let mut feature = feature(name, namespace, &[]);
+        feature.expect_intents().return_const(intents);
+        feature
+    }
+
+    fn dm(content: &str) -> MessageRequest {
+        MessageRequest::dm(UserId::new(1), ChannelId::new(5), content)
+    }
+
+    fn message_content(message: &CreateMessage) -> String {
+        let json = serde_json::to_value(message).unwrap();
+        json["content"].as_str().unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn intents_are_the_union_over_features() {
+        let registry = builder()
+            .register(listening("A", "a", GatewayIntents::DIRECT_MESSAGES))
+            .register(listening("B", "b", GatewayIntents::GUILD_MESSAGES))
+            .register(listening("C", "c", GatewayIntents::empty()))
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            registry.intents(),
+            GatewayIntents::DIRECT_MESSAGES | GatewayIntents::GUILD_MESSAGES
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_reach_only_features_with_matching_intents() {
+        let mut dms = listening("DMs", "dm", GatewayIntents::DIRECT_MESSAGES);
+        dms.expect_on_message()
+            .withf(|_, msg| msg.content == "hi")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut guilds = listening("Guilds", "g", GatewayIntents::GUILD_MESSAGES);
+        guilds.expect_on_message().times(0);
+        let mut none = listening("None", "n", GatewayIntents::empty());
+        none.expect_on_message().times(0);
+        let registry = builder()
+            .register(dms)
+            .register(guilds)
+            .register(none)
+            .build()
+            .unwrap();
+
+        // No `ensure` expectation: messages don't touch the users table.
+        registry
+            .route_message(&message_ctx(MockDiscordApi::new()), dm("hi"))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn guild_messages_need_guild_intents() {
+        let mut dms = listening("DMs", "dm", GatewayIntents::DIRECT_MESSAGES);
+        dms.expect_on_message().times(0);
+        let registry = builder().register(dms).build().unwrap();
+
+        let mut msg = dm("hi");
+        msg.guild = Some(serenity::all::GuildId::new(3));
+        registry
+            .route_message(&message_ctx(MockDiscordApi::new()), msg)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn message_errors_are_replied_in_the_channel() {
+        for (error, reply) in [
+            (FeatureError::user("Too long"), "Too long"),
+            (FeatureError::internal("db is on fire"), GENERIC_ERROR),
+        ] {
+            let mut dms = listening("DMs", "dm", GatewayIntents::DIRECT_MESSAGES);
+            let error = std::sync::Mutex::new(Some(error));
+            dms.expect_on_message()
+                .returning(move |_, _| Err(error.lock().unwrap().take().unwrap()));
+            let registry = builder().register(dms).build().unwrap();
+            let mut discord = MockDiscordApi::new();
+            discord
+                .expect_send_message()
+                .withf(move |channel, message| {
+                    *channel == ChannelId::new(5) && message_content(message) == reply
+                })
+                .times(1)
+                .returning(|_, _| Ok(()));
+
+            registry
+                .route_message(&message_ctx(discord), dm("hi"))
+                .await;
+        }
     }
 
     async fn get(router: &Router, path: &str) -> (u16, String) {

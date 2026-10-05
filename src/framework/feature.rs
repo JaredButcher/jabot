@@ -1,10 +1,10 @@
 use async_trait::async_trait;
-use serenity::all::CreateCommand;
+use serenity::all::{CreateCommand, GatewayIntents};
 
-use super::context::InteractionCtx;
+use super::context::{InteractionCtx, MessageCtx};
 use super::error::FeatureError;
 use super::http::HttpCtx;
-use super::request::{CommandRequest, ComponentRequest, ModalRequest};
+use super::request::{CommandRequest, ComponentRequest, MessageRequest, ModalRequest};
 
 /// A self-contained bot capability (e.g. Secret Santa). Register it with
 /// [`FeatureRegistry`](super::FeatureRegistry); the registry routes interactions to it.
@@ -21,6 +21,13 @@ pub trait Feature: Send + Sync {
     /// Top-level slash commands this feature owns. The registry routes by command name.
     fn commands(&self) -> Vec<CreateCommand> {
         vec![]
+    }
+
+    /// Gateway intents this feature needs. The bot requests the union over all features.
+    /// `DIRECT_MESSAGES` or `GUILD_MESSAGES` also subscribes the feature to `on_message` for
+    /// messages from DMs or servers.
+    fn intents(&self) -> GatewayIntents {
+        GatewayIntents::empty()
     }
 
     /// HTTP routes this feature serves. The registry nests them under
@@ -49,6 +56,15 @@ pub trait Feature: Send + Sync {
         &self,
         _ctx: &InteractionCtx,
         _req: ModalRequest,
+    ) -> Result<(), FeatureError> {
+        Ok(())
+    }
+
+    /// A message from a user (never a bot) where this feature's `intents` apply.
+    async fn on_message(
+        &self,
+        _ctx: &MessageCtx,
+        _msg: MessageRequest,
     ) -> Result<(), FeatureError> {
         Ok(())
     }

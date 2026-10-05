@@ -10,3 +10,10 @@ pub struct InteractionCtx {
     pub discord: Arc<dyn DiscordApi>,
     pub users: Arc<dyn UserRepo>,
 }
+
+/// Dependencies handed to a feature for one message. There's no responder: a feature replies
+/// with `discord.send_message` to the message's channel.
+pub struct MessageCtx {
+    pub discord: Arc<dyn DiscordApi>,
+    pub users: Arc<dyn UserRepo>,
+}

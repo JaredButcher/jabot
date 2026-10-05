@@ -8,7 +8,7 @@ use jabot::framework::{
     FeatureRegistry, HttpConfig, SerenityDiscordApi, SqliteUserRepo, parse_base_path,
     parse_trusted_proxies, serve,
 };
-use serenity::all::{Command, Interaction};
+use serenity::all::{Command, Interaction, Message};
 use serenity::async_trait;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
@@ -30,6 +30,12 @@ impl EventHandler for Bot {
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         self.registry.dispatch(ctx.http.clone(), interaction).await;
+    }
+
+    async fn message(&self, ctx: Context, message: Message) {
+        self.registry
+            .dispatch_message(ctx.http.clone(), &message)
+            .await;
     }
 }
 
@@ -148,8 +154,11 @@ async fn main() {
     let registry = registry.build().expect("Feature registration conflict");
     let registry = Arc::new(registry);
 
-    // Interactions (commands, components, modals) arrive without any gateway intents.
-    let mut client = Client::builder(&token, GatewayIntents::empty())
+    // Interactions (commands, components, modals) arrive without any gateway intents; features
+    // that read messages ask for the intents they need.
+    let intents = registry.intents();
+    tracing::info!(?intents, "connecting to Discord");
+    let mut client = Client::builder(&token, intents)
         .event_handler(Bot {
             registry: registry.clone(),
         })
