@@ -113,19 +113,11 @@ fn reply_has_ready_to_run_commands() {
 
     assert_eq!(
         content(&response),
-        r#"Your tell token: `tell_abc`
-Anyone with it can DM you through me, so keep it private.
-
-Send yourself a message:
+        r#"Send yourself a message:
 ```sh
-curl -fsS https://example.com/jabot/tell \
-     -H 'Content-Type: application/json' \
-     -d '{"token": "tell_abc", "message": "Task finished"}'
+curl -fsS https://example.com/jabot/tell -H 'Content-Type: application/json' -d '{"token": "tell_abc", "message": "Task finished"}'
 ```
-Shell helper (needs `jq`), e.g. `long_task; tell "long_task exited with $?"`:
-```sh
-tell() { jq -nc --arg token tell_abc --arg message "${*:-done}" '$ARGS.named' | curl -fsS https://example.com/jabot/tell -H 'Content-Type: application/json' --data-binary @-; }
-```"#
+"#
     );
 }
 
