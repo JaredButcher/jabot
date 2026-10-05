@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use serenity::all::{CreateCommand, GatewayIntents};
 
-use super::context::{InteractionCtx, MessageCtx};
+use super::context::{AutocompleteCtx, InteractionCtx, MessageCtx};
 use super::error::FeatureError;
 use super::http::HttpCtx;
-use super::request::{CommandRequest, ComponentRequest, MessageRequest, ModalRequest};
+use super::request::{
+    AutocompleteRequest, CommandRequest, ComponentRequest, MessageRequest, ModalRequest,
+};
 
 /// A self-contained bot capability (e.g. Secret Santa). Register it with
 /// [`FeatureRegistry`](super::FeatureRegistry); the registry routes interactions to it.
@@ -67,5 +69,15 @@ pub trait Feature: Send + Sync {
         _msg: MessageRequest,
     ) -> Result<(), FeatureError> {
         Ok(())
+    }
+
+    /// Suggestions for the option the user is typing into, as `(label, value)` pairs. The
+    /// registry sends at most 25. Errors can't be shown to the user; they're logged.
+    async fn on_autocomplete(
+        &self,
+        _ctx: &AutocompleteCtx,
+        _req: AutocompleteRequest,
+    ) -> Result<Vec<(String, String)>, FeatureError> {
+        Ok(vec![])
     }
 }

@@ -2,26 +2,33 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serenity::all::{
-    ChannelId, CreateCommand, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, CreateMessage, GatewayIntents, Http, Interaction,
-    InteractionId, Message, UserId,
+    ChannelId, CreateAutocompleteResponse, CreateCommand, CreateInteractionResponse,
+    CreateInteractionResponseFollowup, CreateInteractionResponseMessage, CreateMessage,
+    GatewayIntents, Http, Interaction, InteractionId, Message, UserId,
 };
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Extension};
 
-use super::context::{InteractionCtx, MessageCtx};
-use super::discord::{DiscordApi, SerenityDiscordApi, SerenityResponder};
+use super::context::{AutocompleteCtx, InteractionCtx, MessageCtx};
+use super::discord::{DiscordApi, Responder, SerenityDiscordApi, SerenityResponder};
 use super::error::FeatureError;
 use super::feature::Feature;
 use super::http::{HttpConfig, HttpCtx, TrustedProxies, log_request};
-use super::request::{CommandRequest, ComponentRequest, MessageRequest, ModalRequest};
+use super::request::{
+    AutocompleteRequest, CommandRequest, ComponentRequest, MessageRequest, ModalRequest,
+};
 use super::users::UserRepo;
 
 const GENERIC_ERROR: &str = "Something went wrong. Please try again later.";
 
 /// Largest request body any route accepts. A feature can raise it for its own routes.
 const BODY_LIMIT: usize = 32 * 1024;
+
+/// Discord shows at most this many autocomplete suggestions.
+const MAX_SUGGESTIONS: usize = 25;
+/// Discord's limit on an autocomplete suggestion's label and value, in characters.
+const MAX_SUGGESTION_CHARS: usize = 100;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RegistryError {
@@ -184,7 +191,49 @@ impl FeatureRegistry {
                 let ctx = self.context(&http, modal.id, &modal.token);
                 self.route_modal(&ctx, ModalRequest::from(&modal)).await;
             }
+            Interaction::Autocomplete(command) => {
+                let responder = SerenityResponder::new(http, command.id, command.token.clone());
+                let ctx = AutocompleteCtx {
+                    users: self.users.clone(),
+                };
+                self.route_autocomplete(&responder, &ctx, AutocompleteRequest::from(&command))
+                    .await;
+            }
             other => tracing::debug!(kind = ?other.kind(), "ignoring interaction"),
+        }
+    }
+
+    /// No `users.ensure` here: autocomplete fires every few keystrokes and writes nothing.
+    async fn route_autocomplete(
+        &self,
+        responder: &dyn Responder,
+        ctx: &AutocompleteCtx,
+        req: AutocompleteRequest,
+    ) {
+        let (feature, suggestions) = match self.by_command.get(&req.command) {
+            Some(&index) => {
+                let feature = &self.features[index];
+                (feature.name(), feature.on_autocomplete(ctx, req).await)
+            }
+            None => {
+                tracing::warn!(command = %req.command, "no feature handles autocomplete");
+                ("registry", Ok(vec![]))
+            }
+        };
+        let suggestions = suggestions.unwrap_or_else(|error| {
+            tracing::error!(feature, %error, "autocomplete handler failed");
+            vec![]
+        });
+        let truncate = |s: String| s.chars().take(MAX_SUGGESTION_CHARS).collect::<String>();
+        let response = suggestions.into_iter().take(MAX_SUGGESTIONS).fold(
+            CreateAutocompleteResponse::new(),
+            |response, (label, value)| response.add_string_choice(truncate(label), truncate(value)),
+        );
+        if let Err(error) = responder
+            .respond(CreateInteractionResponse::Autocomplete(response))
+            .await
+        {
+            tracing::error!(feature, %error, "could not send autocomplete suggestions");
         }
     }
 
@@ -602,6 +651,98 @@ mod tests {
     fn message_content(message: &CreateMessage) -> String {
         let json = serde_json::to_value(message).unwrap();
         json["content"].as_str().unwrap_or_default().to_string()
+    }
+
+    fn autocomplete_ctx() -> AutocompleteCtx {
+        AutocompleteCtx {
+            users: Arc::new(MockUserRepo::new()),
+        }
+    }
+
+    fn key_typed(partial: &str) -> AutocompleteRequest {
+        AutocompleteRequest::new(UserId::new(1), "k", Some("get"), "key", partial)
+    }
+
+    /// A responder expecting one autocomplete response with exactly these choices.
+    fn suggests(expected: Vec<(String, String)>) -> MockResponder {
+        let mut responder = MockResponder::new();
+        responder
+            .expect_respond()
+            .times(1)
+            .returning(move |response| {
+                let json = serde_json::to_value(&response).unwrap();
+                assert_eq!(json["type"], 8);
+                let choices: Vec<(String, String)> = json["data"]["choices"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|c| {
+                        let s = |k: &str| c[k].as_str().unwrap().to_string();
+                        (s("name"), s("value"))
+                    })
+                    .collect();
+                assert_eq!(choices, expected);
+                Ok(())
+            });
+        responder
+    }
+
+    #[tokio::test]
+    async fn routes_autocomplete_by_command_name() {
+        let mut kv = feature("kv", "kv", &["k"]);
+        kv.expect_on_autocomplete()
+            .withf(|_, req| req.partial == "pa" && req.focused == "key")
+            .times(1)
+            .returning(|_, _| Ok(vec![("pasta".into(), "pasta".into())]));
+        let registry = builder().register(kv).build().unwrap();
+
+        let responder = suggests(vec![("pasta".into(), "pasta".into())]);
+        registry
+            .route_autocomplete(&responder, &autocomplete_ctx(), key_typed("pa"))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn autocomplete_is_truncated_to_discord_limits() {
+        let long = "x".repeat(150);
+        let mut kv = feature("kv", "kv", &["k"]);
+        let many: Vec<(String, String)> = (0..30)
+            .map(|i| (format!("{i}{long}"), i.to_string()))
+            .collect();
+        kv.expect_on_autocomplete()
+            .returning(move |_, _| Ok(many.clone()));
+        let registry = builder().register(kv).build().unwrap();
+
+        let expected = (0..25)
+            .map(|i| {
+                let label: String = format!("{i}{long}").chars().take(100).collect();
+                (label, i.to_string())
+            })
+            .collect();
+        registry
+            .route_autocomplete(&suggests(expected), &autocomplete_ctx(), key_typed(""))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn autocomplete_error_suggests_nothing() {
+        let mut kv = feature("kv", "kv", &["k"]);
+        kv.expect_on_autocomplete()
+            .returning(|_, _| Err(FeatureError::user("nope")));
+        let registry = builder().register(kv).build().unwrap();
+
+        registry
+            .route_autocomplete(&suggests(vec![]), &autocomplete_ctx(), key_typed("pa"))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn autocomplete_for_unknown_command_suggests_nothing() {
+        let registry = builder().build().unwrap();
+
+        registry
+            .route_autocomplete(&suggests(vec![]), &autocomplete_ctx(), key_typed("pa"))
+            .await;
     }
 
     #[test]

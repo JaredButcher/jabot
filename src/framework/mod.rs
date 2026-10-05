@@ -10,7 +10,7 @@ mod registry;
 mod request;
 mod users;
 
-pub use context::{InteractionCtx, MessageCtx};
+pub use context::{AutocompleteCtx, InteractionCtx, MessageCtx};
 pub use discord::{
     DiscordApi, DiscordError, DmError, Responder, SerenityDiscordApi, SerenityResponder,
 };
@@ -22,7 +22,8 @@ pub use http::{
 };
 pub use registry::{FeatureRegistry, RegistryBuilder, RegistryError};
 pub use request::{
-    CommandRequest, ComponentKind, ComponentRequest, MessageRequest, ModalRequest, Options,
+    AutocompleteRequest, CommandRequest, ComponentKind, ComponentRequest, MessageRequest,
+    ModalRequest, Options,
 };
 pub use users::{SqliteUserRepo, UserRepo};
 

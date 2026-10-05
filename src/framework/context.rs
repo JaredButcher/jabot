@@ -17,3 +17,9 @@ pub struct MessageCtx {
     pub discord: Arc<dyn DiscordApi>,
     pub users: Arc<dyn UserRepo>,
 }
+
+/// Dependencies handed to a feature for one autocomplete request. There's no responder: the
+/// registry sends the feature's suggestions.
+pub struct AutocompleteCtx {
+    pub users: Arc<dyn UserRepo>,
+}

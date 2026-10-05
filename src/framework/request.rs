@@ -83,6 +83,52 @@ fn flatten(options: &[CommandDataOption]) -> (Option<String>, Option<String>, Op
     }
 }
 
+/// The user is typing into an option with autocomplete; the feature suggests values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutocompleteRequest {
+    pub user: UserId,
+    pub command: String,
+    pub subcommand: Option<String>,
+    /// Name of the option being typed into.
+    pub focused: String,
+    /// What the user has typed so far.
+    pub partial: String,
+}
+
+impl AutocompleteRequest {
+    pub fn new(
+        user: UserId,
+        command: impl Into<String>,
+        subcommand: Option<&str>,
+        focused: impl Into<String>,
+        partial: impl Into<String>,
+    ) -> Self {
+        Self {
+            user,
+            command: command.into(),
+            subcommand: subcommand.map(str::to_string),
+            focused: focused.into(),
+            partial: partial.into(),
+        }
+    }
+}
+
+impl From<&CommandInteraction> for AutocompleteRequest {
+    fn from(command: &CommandInteraction) -> Self {
+        let (_, subcommand, _) = flatten(&command.data.options);
+        let focused = command.data.autocomplete();
+        Self {
+            user: command.user.id,
+            command: command.data.name.clone(),
+            subcommand,
+            focused: focused
+                .as_ref()
+                .map_or_else(String::new, |o| o.name.to_string()),
+            partial: focused.map_or_else(String::new, |o| o.value.to_string()),
+        }
+    }
+}
+
 /// Named option values of a command.
 #[derive(Debug, Clone, Default)]
 pub struct Options(HashMap<String, CommandDataOptionValue>);
@@ -324,6 +370,23 @@ mod tests {
 
         assert_eq!(req.subcommand, None);
         assert_eq!(req.options.i64("count"), Some(2));
+    }
+
+    #[test]
+    fn finds_the_focused_option_inside_a_subcommand() {
+        let interaction = command(serde_json::json!({
+            "id": "3", "name": "k", "type": 1,
+            "options": [{ "name": "get", "type": 1, "options": [
+                { "name": "key", "type": 3, "value": "pa", "focused": true }
+            ]}]
+        }));
+
+        let req = AutocompleteRequest::from(&interaction);
+
+        assert_eq!(
+            req,
+            AutocompleteRequest::new(UserId::new(42), "k", Some("get"), "key", "pa")
+        );
     }
 
     #[test]
