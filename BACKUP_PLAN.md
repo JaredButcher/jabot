@@ -1,6 +1,6 @@
 # JABot Plan: Database Backups
 
-**Status:** planned, not started.
+**Status:** implemented on `feature/backup` (steps 1–7). Step 8, the manual test on the Pi, is still to do. `jabot backup` and a restore were tested locally against a real restic 0.18 repository; the Docker image build wasn't (no Docker in the dev environment).
 
 ## Goals
 
@@ -21,7 +21,7 @@
 | Tool | **restic**, from Debian trixie's `apt` (0.18) in the runtime image | Encryption is built in, and compression is on by default for repository format 2. `RESTIC_COMPRESSION=max` costs nothing at this size. The version moves with the base image |
 | Who runs it | **The bot**: a tokio task started from `main.rs`, independent of the Discord client and the HTTP server | It isn't a `Feature` (no commands or interactions), so it lives in `src/backup/`. If the task fails, it logs and keeps going; it never takes the bot down |
 | Consistent copy | `VACUUM INTO '/data/backup/database.sqlite'` through the bot's pool, then `PRAGMA integrity_check` on the copy | Safe while the bot is running, with the default rollback journal. Writes wait for a moment, which is negligible at this size |
-| When | Daily at `BACKUP_TIME_UTC` (default `08:00`, i.e. 4 a.m. Eastern in summer). At startup, if the latest off-site snapshot is more than 25 hours old, run 2 minutes after startup | Restarts and deploys don't cause missed days. "Latest snapshot" comes from `restic snapshots`, so the bot keeps no backup state of its own |
+| When | Daily at `BACKUP_TIME_UTC` (default `08:00`, i.e. 4 a.m. Eastern in summer). At startup, if there's no snapshot since the latest daily time, run 2 minutes after startup | Restarts and deploys don't cause missed days. (A "more than 25 hours old" rule would skip a day when the bot is down at 08:00 and back at 09:00.) "Latest snapshot" comes from `restic snapshots`, so the bot keeps no backup state of its own |
 | Retries | A failed run retries after 1 hour, up to 3 times, then waits for the next day | Covers a B2 or network blip without hammering anything |
 | Retention | `restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune` after each successful backup | **This is also how long deleted data survives.** A `/k` value or `tell` token deleted today is still in backups for up to about 6 months. Short enough to be reasonable, long enough to notice slow corruption |
 | Checking | `restic check --read-data` once a week (Sundays) | The repository is a few MB, so reading all of it stays well inside B2's free 1 GB a day of downloads |
@@ -77,7 +77,7 @@ src/backup/
 pub trait Restic: Send + Sync {
     /// Time of the newest `scheduled` snapshot, if any. Fails if the repository, the key or
     /// the password is wrong, so it doubles as the startup check.
-    async fn latest_snapshot(&self) -> Result<Option<SystemTime>, ResticError>;
+    async fn latest_snapshot(&self) -> Result<Option<u64>, ResticError>; // unix seconds
     /// Remove stale locks left by a run that was killed.
     async fn unlock(&self) -> Result<(), ResticError>;
     async fn backup(&self, path: &Path) -> Result<SnapshotSummary, ResticError>;
@@ -229,7 +229,7 @@ before the new version starts. Recommendations:
 
 - **schedule.rs** (pure, unix seconds):
   - The next run is today or tomorrow at `BACKUP_TIME_UTC`.
-  - Catch-up when the latest snapshot is over 25 hours old, or missing.
+  - Catch-up when there is no snapshot since the latest daily time, or none at all.
   - No catch-up right after a recent backup.
   - Retries at +1 hour, at most 3, then the next day.
   - `BACKUP_TIME_UTC` parsing (`08:00`, `8:00`, bad values refused at startup).

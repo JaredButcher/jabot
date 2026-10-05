@@ -25,7 +25,8 @@ After adding or changing a `query!`, run `cargo sqlx prepare -- --all-targets` a
 - **Run with explicit env**: `DATABASE_URL=sqlite:database.sqlite DISCORD_TOKEN_FILE=... cargo run`
 - **Test**: `cargo test` (`#[sqlx::test]` tests create their own throwaway databases under `target/sqlx/`)
 - **Lint**: `cargo clippy --all-targets`
-- **Deploy** (on the server, from the deployment checkout): `./deploy.sh` pulls, rebuilds the image and restarts the container with `docker compose up -d --build`. Setup is in the README ("Deployment")
+- **Back up once**: `jabot backup` (in the container: `docker compose exec jabot jabot backup`) runs one backup without connecting to Discord; needs `RESTIC_REPOSITORY` and restic's settings
+- **Deploy** (on the server, from the deployment checkout): `./deploy.sh` pulls, builds the image, stops the bot, copies the database to `backups/deploy/<UTC time>-<old commit>.sqlite` (keeping the newest `DEPLOY_BACKUPS_KEEP`, default 10), and starts the new container. Setup, backups, restores and rollbacks are in the README
 
 ## Environment Variables
 
@@ -36,8 +37,11 @@ After adding or changing a `query!`, run `cargo sqlx prepare -- --all-targets` a
 - `BASE_PATH`: Prefix of every HTTP route (default `/jabot`); the front proxy forwards `/jabot/*` unchanged
 - `TRUSTED_PROXIES`: Comma-separated IPs/CIDR ranges allowed to set `X-Forwarded-For` (default empty: the header is ignored)
 - `DOMAIN`, `LAN_HOST`: Host names for the URLs `/tell` prints (`https://<host><BASE_PATH>/tell`); without `DOMAIN` it prints `http://localhost:<port>...`
+- `RESTIC_REPOSITORY`: restic repository for daily backups; unset disables them. restic also reads `RESTIC_PASSWORD_FILE`, `AWS_SHARED_CREDENTIALS_FILE` (the B2 key), `RESTIC_COMPRESSION` and `RESTIC_CACHE_DIR` itself
+- `BACKUP_TIME_UTC`: Daily backup time (default `08:00`)
+- `BOT_OWNER_ID`: Discord user id of the bot's admin, DMed when backups fail or recover
 
-Under Docker Compose, `compose.yaml` sets these from `.env` (see `.env.example`), plus `HTTP_PUBLISH`, the host address the port is published on.
+Under Docker Compose, `compose.yaml` sets these from `.env` (see `.env.example`), plus `HTTP_PUBLISH`, the host address the port is published on. The container runs as the host's `jabot` user: `deploy.sh` exports `JABOT_UID`/`JABOT_GID`, and any `docker compose` command run by hand needs them too.
 
 ## Dependencies
 
@@ -47,6 +51,8 @@ Under Docker Compose, `compose.yaml` sets these from `.env` (see `.env.example`)
 - `async-trait`, `thiserror`, `tracing` - trait objects with async methods, error types, logging
 - `mockall` (dev) - mocks generated from the dependency traits
 - `tower` (dev) - `ServiceExt::oneshot` for HTTP tests against the real router
+- `tempfile` (dev) - scratch directories for backup tests
+- `restic` (in the image, from Debian) - encrypted, compressed uploads of the daily backups
 
 ## Architecture
 
@@ -54,6 +60,12 @@ Under Docker Compose, `compose.yaml` sets these from `.env` (see `.env.example`)
 src/
 ├── main.rs        # config, SqlitePool + migrations, serenity Client, Bot (EventHandler), feature registration, HTTP server
 ├── lib.rs
+├── backup/        # daily off-site backups; not a feature (no commands), started from main.rs
+│   ├── mod.rs       # BackupConfig, run_scheduler (startup check, catch-up, daily loop)
+│   ├── schedule.rs  # pure: next run from unix time, catch-up and retry rules, Sundays
+│   ├── snapshot.rs  # VACUUM INTO + integrity_check of the copy
+│   ├── restic.rs    # trait Restic + ResticCli (child process, timeout, JSON output)
+│   └── run.rs       # Backup::run (snapshot → unlock → backup → forget/prune → check), Alerts (owner DMs)
 ├── framework/     # shared plumbing; knows nothing about any feature
 │   ├── feature.rs   # trait Feature: name, namespace, commands, intents, on_command/on_component/on_modal/on_message/on_autocomplete, http_routes
 │   ├── registry.rs  # FeatureRegistry: routes commands/autocomplete by name, components/modals by custom-id namespace, messages by intents; builds the HTTP router
@@ -106,6 +118,8 @@ src/
 How an interaction flows: `Bot::interaction_create` → `FeatureRegistry::dispatch` converts it to a request struct, ensures the user has a `users` row, picks the feature (by command name, or by the custom-id prefix before the first `:`), and calls its hook with an `InteractionCtx`. A handler loads state through its repository, decides with pure functions in `rules.rs`, persists, replies with `ctx.responder`, and only then sends DMs with `ctx.discord` (Discord allows 3 seconds to acknowledge). Returning an error lets the registry reply: refusals are shown ephemerally, everything else is logged.
 
 How a message flows: `Bot::message` → `FeatureRegistry::dispatch_message` drops messages from bots and system messages, then calls `on_message` on each feature whose `intents()` cover where it was sent (`DIRECT_MESSAGES` for DMs, `GUILD_MESSAGES` for servers), with a `MessageCtx`. There's no `users.ensure` (that would be a write per message), and errors are replied in the message's channel. Autocomplete goes to `on_autocomplete` by command name; the feature returns suggestions, the registry sends at most 25, and errors are only logged.
+
+How backups run: if `RESTIC_REPOSITORY` is set, `main.rs` spawns `backup::run_scheduler` on its own task (outside the `select!`, so it can never stop the bot). It runs `VACUUM INTO` through the shared pool to `backup/database.sqlite` under the working directory, uploads that with restic as a child process (host `jabot`, tag `scheduled`), prunes, and deletes the copy. Failures DM `BOT_OWNER_ID` once per incident through `DiscordApi`.
 
 How an HTTP request flows: `main.rs` runs `serve` beside the Discord client (whichever stops first, or SIGTERM, ends the process). `FeatureRegistry::http_router` nests each feature's `http_routes` under `<BASE_PATH>/<namespace>` and adds `<BASE_PATH>/healthz`, a 32 KiB body limit and request logging. Handlers get an `HttpCtx { discord, users }` and extract `ClientIp`; they return their own error type implementing `IntoResponse`. TLS is the front proxy's job; the bot speaks plain HTTP.
 
