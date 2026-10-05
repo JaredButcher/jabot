@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-JABot is a Rust Discord bot with features such as orchestrating a secret santa. It uses the Serenity Discord API library and SQLx for database operations with SQLite. Each capability is a self-contained *feature* plugged into a small framework, and features take their dependencies as traits so they can be tested with `mockall`.
+JABot is a Rust Discord bot with features such as orchestrating a secret santa and a per-user key-value store. It uses the Serenity Discord API library and SQLx for database operations with SQLite. Each capability is a self-contained *feature* plugged into a small framework, and features take their dependencies as traits so they can be tested with `mockall`.
 
 ## Database Setup
 
@@ -55,15 +55,27 @@ src/
 ├── main.rs        # config, SqlitePool + migrations, serenity Client, Bot (EventHandler), feature registration, HTTP server
 ├── lib.rs
 ├── framework/     # shared plumbing; knows nothing about any feature
-│   ├── feature.rs   # trait Feature: name, namespace, commands, on_command/on_component/on_modal, http_routes
-│   ├── registry.rs  # FeatureRegistry: routes commands by name, components/modals by custom-id namespace; builds the HTTP router
+│   ├── feature.rs   # trait Feature: name, namespace, commands, intents, on_command/on_component/on_modal/on_message/on_autocomplete, http_routes
+│   ├── registry.rs  # FeatureRegistry: routes commands/autocomplete by name, components/modals by custom-id namespace, messages by intents; builds the HTTP router
 │   ├── http.rs      # HttpCtx, HttpConfig, serve, ClientIp (X-Forwarded-For from trusted proxies only)
-│   ├── request.rs   # CommandRequest/ComponentRequest/ModalRequest: plain data built from serenity interactions
-│   ├── context.rs   # InteractionCtx { responder, discord, users }
-│   ├── discord.rs   # traits Responder (reply to this interaction) + DiscordApi (DMs, lookups), serenity impls; DmError
+│   ├── request.rs   # CommandRequest/ComponentRequest/ModalRequest/AutocompleteRequest/MessageRequest: plain data built from serenity types
+│   ├── context.rs   # InteractionCtx { responder, discord, users }, MessageCtx { discord, users }, AutocompleteCtx { users }
+│   ├── discord.rs   # traits Responder (reply to this interaction) + DiscordApi (DMs, channel messages, lookups), serenity impls; DmError
 │   ├── users.rs     # trait UserRepo + SqliteUserRepo: the shared `users` table
 │   └── error.rs     # FeatureError::User (shown to the user) / Internal (logged, generic reply)
 └── features/
+    ├── kv/              # /k set stores the user's next DM under a key; /k get shows it or lists keys
+    │   ├── mod.rs         # Kv: impl Feature, routing only; intents DIRECT_MESSAGES
+    │   ├── commands.rs    # /k definition; set and get handlers; autocomplete suggestions
+    │   ├── messages.rs    # DM handler: completes a waiting /k set
+    │   ├── components.rs  # Prev/Next on key lists; Cancel/Delete on the set prompt
+    │   ├── custom_id.rs   # KvId: `kv:page:<page>[:<query>]`, `kv:cancel:<id>`, `kv:delete:<id>`
+    │   ├── pending.rs     # PendingSets: in-memory /k sets waiting for their DM (10 minutes)
+    │   ├── model.rs       # Key, PendingId, KvError
+    │   ├── rules.rs       # key normalization, lookup resolution, paging (PAGE_SIZE), value checks
+    │   ├── repo.rs        # trait KvRepo + SqliteKvRepo (kv_* SQL)
+    │   ├── views.rs, text.rs
+    │   └── tests.rs       # handler tests against mocks
     ├── tell/            # /tell gives a token; POST <BASE_PATH>/tell with it DMs the owner
     │   ├── mod.rs         # Tell: impl Feature, routing only; TellConfig
     │   ├── commands.rs    # /tell definition and handler
@@ -93,13 +105,15 @@ src/
 
 How an interaction flows: `Bot::interaction_create` → `FeatureRegistry::dispatch` converts it to a request struct, ensures the user has a `users` row, picks the feature (by command name, or by the custom-id prefix before the first `:`), and calls its hook with an `InteractionCtx`. A handler loads state through its repository, decides with pure functions in `rules.rs`, persists, replies with `ctx.responder`, and only then sends DMs with `ctx.discord` (Discord allows 3 seconds to acknowledge). Returning an error lets the registry reply: refusals are shown ephemerally, everything else is logged.
 
+How a message flows: `Bot::message` → `FeatureRegistry::dispatch_message` drops messages from bots and system messages, then calls `on_message` on each feature whose `intents()` cover where it was sent (`DIRECT_MESSAGES` for DMs, `GUILD_MESSAGES` for servers), with a `MessageCtx`. There's no `users.ensure` (that would be a write per message), and errors are replied in the message's channel. Autocomplete goes to `on_autocomplete` by command name; the feature returns suggestions, the registry sends at most 25, and errors are only logged.
+
 How an HTTP request flows: `main.rs` runs `serve` beside the Discord client (whichever stops first, or SIGTERM, ends the process). `FeatureRegistry::http_router` nests each feature's `http_routes` under `<BASE_PATH>/<namespace>` and adds `<BASE_PATH>/healthz`, a 32 KiB body limit and request logging. Handlers get an `HttpCtx { discord, users }` and extract `ClientIp`; they return their own error type implementing `IntoResponse`. TLS is the front proxy's job; the bot speaks plain HTTP.
 
 Conventions:
 - Feature code never touches serenity's `Context`/`Http` or a `SqlitePool` directly; it goes through `InteractionCtx`/`HttpCtx` and its own repository trait, so every handler is testable with mocks (`MockResponder`, `MockDiscordApi`, `MockUserRepo`, `MockSecretSantaRepo`). Put `#[cfg_attr(test, mockall::automock)]` above `#[async_trait]`.
 - Repository methods are shaped around use cases; writes that belong together run in one transaction, and status changes are conditional (`... WHERE status = ?`) so double clicks are harmless.
 - Tables: `framework/` owns unprefixed tables (`users`); each feature owns tables with its own prefix (`ss_*`) and may reference `users(id)`, never another feature's tables. Write any user id to a feature table only after `ctx.users.ensure(..)`.
-- The bot requests no gateway intents; interactions don't need them.
+- Interactions need no gateway intents. A feature that reads messages declares the intents it needs in `intents()`, and the bot connects with their union. Privileged intents (`MESSAGE_CONTENT`, members, presences) also have to be enabled in the Developer Portal first; DMs to the bot include their text without `MESSAGE_CONTENT`.
 
 ### Adding a feature
 
@@ -107,6 +121,6 @@ Conventions:
 2. If it needs storage, define a `<Name>Repo` trait with `#[cfg_attr(test, mockall::automock)]` and a sqlx impl, and add a migration for `<prefix>_*` tables that reference `users(id)`.
 3. Add one `.register(...)` line in `main.rs`. `build()` fails at startup on a duplicate command name or namespace.
 4. Test handlers with the mocks (`crate::framework::testing` has helpers for building a context and reading responses).
-5. For HTTP endpoints, implement `http_routes`; routes are served under `<BASE_PATH>/<namespace>`. Keep handlers thin (extract, call a service, map errors) and test the service with mocks and the routes with `tower::ServiceExt::oneshot` plus `MockConnectInfo` (see `features/tell/http.rs`). The front proxy decides which paths are public.
+5. To read messages, return the intents from `intents()` and implement `on_message`; see `features/kv/messages.rs`. A feature gets every message its intents cover, so ignore the ones it isn't waiting for without replying.
+6. For HTTP endpoints, implement `http_routes`; routes are served under `<BASE_PATH>/<namespace>`. Keep handlers thin (extract, call a service, map errors) and test the service with mocks and the routes with `tower::ServiceExt::oneshot` plus `MockConnectInfo` (see `features/tell/http.rs`). The front proxy decides which paths are public.
 
-Message events aren't supported yet; `REFACTOR_PLAN.md` ("Adding Message Support Later") describes how to add them.

@@ -1,6 +1,6 @@
 # JABot
 JABot
-A rust discord bot with features such as orchestrating a secret santa
+A rust discord bot with features such as orchestrating a secret santa and storing text under keys
 
 https://github.com/serenity-rs/serenity
 
@@ -38,6 +38,16 @@ The commands avoid newer curl options (`--json` needs 7.82, `--fail-with-body` 7
 Responses are JSON. `204` means the DM was sent. Errors look like `{"error": "..."}`: `401` for a bad token, `400`/`413` for a missing or over-2000-character message, `422` if Discord won't let the bot DM you, and `429` (with `Retry-After`) when rate limited. Each user may send bursts of 5, then 5 a minute.
 
 The HTTP server only runs when `HTTP_PORT` is set. Locally, `HTTP_PORT=8080 cargo run` serves `http://localhost:8080/jabot/tell`.
+
+# k
+A personal key-value store. Keys are per user, case-insensitive, and up to 64 characters.
+
+- `/k set key:<key>` DMs you a prompt (and the key's current value, if it has one). Your next DM to the bot within 10 minutes becomes the value, exactly as typed, Markdown included, up to 2000 characters. Only text is stored, not attachments. The prompt has **Cancel**, and **Delete** when the key already exists.
+- `/k get key:<key>` finds keys containing what you typed. An exact match, or the only match, shows its value; several matches are listed, 25 per page.
+- `/k get` without a key lists all your keys.
+- Both commands suggest your keys as you type.
+
+Replies are only visible to you, except in the bot's DM, where they're normal messages. The bot needs the `DIRECT_MESSAGES` gateway intent, which isn't privileged, so nothing has to change in the Developer Portal.
 
 # Deployment
 The bot runs under Docker Compose and serves plain HTTP. A front proxy, shared with other web servers on the domain, terminates TLS and forwards `/jabot/*` to it unchanged.

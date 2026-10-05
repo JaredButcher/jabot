@@ -1,6 +1,6 @@
 # JABot Plan: `/k` Key-Value Store
 
-**Status:** planned, not started.
+**Status:** implemented on `feature/kv` (steps 1–9). Steps 6–8 landed as one commit, since the pure code had no users on its own. Step 10, the manual test and deploy, is still to do.
 
 ## Goals
 
