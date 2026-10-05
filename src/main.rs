@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::sync::Arc;
 
+use jabot::features::kv::{Kv, SqliteKvRepo};
 use jabot::features::secret_santa::{SecretSanta, SqliteSecretSantaRepo};
 use jabot::features::tell::{SqliteTellRepo, Tell, TellConfig};
 use jabot::framework::{
@@ -143,7 +144,8 @@ async fn main() {
     let mut registry = FeatureRegistry::builder(Arc::new(SqliteUserRepo::new(pool.clone())))
         .register(SecretSanta::new(Arc::new(SqliteSecretSantaRepo::new(
             pool.clone(),
-        ))));
+        ))))
+        .register(Kv::new(Arc::new(SqliteKvRepo::new(pool.clone()))));
     // tell is only useful with the HTTP server it receives requests on.
     if let Some(http) = &http_config {
         registry = registry.register(Tell::new(
