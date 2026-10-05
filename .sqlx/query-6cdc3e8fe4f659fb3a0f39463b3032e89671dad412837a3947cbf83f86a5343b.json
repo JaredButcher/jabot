@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE kv_values SET updated_at = '2000-01-01 00:00:00'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "6cdc3e8fe4f659fb3a0f39463b3032e89671dad412837a3947cbf83f86a5343b"
+}

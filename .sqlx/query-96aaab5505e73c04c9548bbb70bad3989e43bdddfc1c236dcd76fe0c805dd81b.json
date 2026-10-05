@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT name FROM kv_values\n             WHERE user_id = ?1 AND (?2 IS NULL OR instr(name, ?2) > 0)\n             ORDER BY name",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "96aaab5505e73c04c9548bbb70bad3989e43bdddfc1c236dcd76fe0c805dd81b"
+}

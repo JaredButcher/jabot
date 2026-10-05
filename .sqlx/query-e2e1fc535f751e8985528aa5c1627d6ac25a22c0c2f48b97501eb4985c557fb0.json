@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO kv_values (user_id, name, value) VALUES (?, ?, ?)\n             ON CONFLICT (user_id, name)\n             DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e2e1fc535f751e8985528aa5c1627d6ac25a22c0c2f48b97501eb4985c557fb0"
+}

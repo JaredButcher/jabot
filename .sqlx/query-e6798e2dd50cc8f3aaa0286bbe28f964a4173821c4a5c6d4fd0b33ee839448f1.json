@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM kv_values WHERE user_id = ? AND name = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e6798e2dd50cc8f3aaa0286bbe28f964a4173821c4a5c6d4fd0b33ee839448f1"
+}

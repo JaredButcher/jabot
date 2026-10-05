@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT updated_at FROM kv_values",
+  "describe": {
+    "columns": [
+      {
+        "name": "updated_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "be42b2251059937f6d1f5e6ad1f1c45d49d6450153a9a909d425bd5eef678324"
+}
