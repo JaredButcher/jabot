@@ -11,6 +11,8 @@ echo "==> Pulling"
 git pull --ff-only
 
 echo "==> Building and starting"
+export JABOT_UID=$(id -u jabot)
+export JABOT_GID=$(id -g jabot)
 docker compose up -d --build
 
 # A startup failure (e.g. a database that can't be opened) shows within seconds. The restart

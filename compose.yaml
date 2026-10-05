@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     init: true
     environment:
-      DATABASE_URL: sqlite:///data/database.sqlite
+      DATABASE_URL: sqlite://database.sqlite
       DISCORD_TOKEN_FILE: /run/secrets/discord_token
       HTTP_PORT: ${HTTP_PORT:-8080}
       BASE_PATH: ${BASE_PATH:-/jabot}
@@ -18,10 +18,11 @@ services:
       # Loopback by default: reachable by a proxy on this machine, not from the network.
       - "${HTTP_PUBLISH:-127.0.0.1}:${HTTP_PORT:-8080}:${HTTP_PORT:-8080}"
     volumes:
-      # Must be writable by uid 10001: sudo chown -R 10001:10001 data
+      # Must be readable and writable by jabot user or group
       - ./data:/data
     secrets:
       - discord_token
+    user: "${JABOT_UID}:${JABOT_GID}"
 
 networks:
   default:
@@ -33,5 +34,5 @@ networks:
 
 secrets:
   discord_token:
-    # Must be readable by uid 10001: sudo chown 10001:10001 secrets/discord_token
-    file: ./secrets/discord_token
+    # Must be readable by jabot user or group
+    file: ./secretes/discord_token
