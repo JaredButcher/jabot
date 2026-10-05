@@ -109,7 +109,7 @@ impl Alerts {
 
     pub async fn succeeded(&mut self, report: &Report) {
         tracing::info!(
-            snapshot = %report.snapshot.id,
+            snapshot = report.snapshot.short_id(),
             size = report.size,
             data_added = report.snapshot.data_added,
             checked = report.checked,
@@ -118,7 +118,7 @@ impl Alerts {
         if self.failing {
             self.notify(format!(
                 "✅ Database backups work again (snapshot `{}`).",
-                report.snapshot.id
+                report.snapshot.short_id()
             ))
             .await;
         }
@@ -144,7 +144,7 @@ mod tests {
 
     fn summary() -> SnapshotSummary {
         SnapshotSummary {
-            id: "4f3c2a1b".into(),
+            id: "4f3c2a1b9e8d7c6b".into(),
             data_added: 10,
         }
     }

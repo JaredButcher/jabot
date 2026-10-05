@@ -59,6 +59,13 @@ pub struct SnapshotSummary {
     pub data_added: u64,
 }
 
+impl SnapshotSummary {
+    /// The first 8 characters of the id, as restic itself shows them.
+    pub fn short_id(&self) -> &str {
+        self.id.get(..8).unwrap_or(&self.id)
+    }
+}
+
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait Restic: Send + Sync {
@@ -387,6 +394,16 @@ exit "$(cat "$d/status" 2>/dev/null || echo 0)"
             fake.args(),
             "backup --json --host jabot --tag scheduled /data/backup/database.sqlite\n"
         );
+    }
+
+    #[test]
+    fn short_ids_are_eight_characters() {
+        let summary = |id: &str| SnapshotSummary {
+            id: id.into(),
+            data_added: 0,
+        };
+        assert_eq!(summary("436f51c11a42e191420f").short_id(), "436f51c1");
+        assert_eq!(summary("abc").short_id(), "abc");
     }
 
     #[tokio::test]

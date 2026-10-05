@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::sync::Arc;
 
+use jabot::backup::{Alerts, Backup, BackupConfig, ResticCli, run_scheduler};
 use jabot::features::kv::{Kv, SqliteKvRepo};
 use jabot::features::secret_santa::{SecretSanta, SqliteSecretSantaRepo};
 use jabot::features::tell::{SqliteTellRepo, Tell, TellConfig};
@@ -9,7 +10,7 @@ use jabot::framework::{
     FeatureRegistry, HttpConfig, SerenityDiscordApi, SqliteUserRepo, parse_base_path,
     parse_trusted_proxies, serve,
 };
-use serenity::all::{Command, Interaction, Message};
+use serenity::all::{Command, Interaction, Message, UserId};
 use serenity::async_trait;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
@@ -109,6 +110,56 @@ fn tell_config(http: &HttpConfig) -> TellConfig {
     TellConfig { url, lan_url }
 }
 
+/// `BOT_OWNER_ID`: the Discord user id of the bot's admin, who is DMed about failed backups.
+fn owner_id() -> Option<UserId> {
+    let id = env::var("BOT_OWNER_ID")
+        .ok()
+        .filter(|id| !id.trim().is_empty())?;
+    let id: u64 = id.trim().parse().expect("Invalid BOT_OWNER_ID");
+    Some(UserId::new(id))
+}
+
+/// `RESTIC_REPOSITORY` enables daily backups; restic reads the rest of its settings itself.
+fn backup_config() -> Option<BackupConfig> {
+    let config = BackupConfig::from_env().expect("Invalid backup settings");
+    if config.is_none() {
+        tracing::info!("RESTIC_REPOSITORY not set; backups disabled");
+    }
+    config
+}
+
+fn backup(pool: &sqlx::SqlitePool, config: &BackupConfig) -> Backup {
+    Backup::new(
+        pool.clone(),
+        Arc::new(ResticCli::new()),
+        config.staging.clone(),
+    )
+}
+
+/// `jabot backup`: one backup now, without connecting to Discord. Exits 0 on success.
+async fn backup_once() -> ! {
+    let Some(config) = backup_config() else {
+        eprintln!("RESTIC_REPOSITORY is not set, so there's nowhere to back up to");
+        std::process::exit(1);
+    };
+    let pool = connect_database().await;
+    match backup(&pool, &config).run(false).await {
+        Ok(report) => {
+            println!(
+                "Backed up {} bytes as snapshot {} ({} bytes new)",
+                report.size,
+                report.snapshot.short_id(),
+                report.snapshot.data_added
+            );
+            std::process::exit(0);
+        }
+        Err(error) => {
+            eprintln!("Backup failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Resolves on Ctrl-C or SIGTERM (what `docker stop` sends).
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -131,8 +182,19 @@ async fn main() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    match env::args().nth(1).as_deref() {
+        None => {}
+        Some("backup") => backup_once().await,
+        Some(other) => {
+            eprintln!("Unknown command {other:?}. Usage: jabot [backup]");
+            std::process::exit(2);
+        }
+    }
+
     let token = get_discord_token().expect("Failed to get Discord token");
     let http_config = http_config();
+    let backup_config = backup_config();
+    let owner = owner_id();
     let pool = connect_database().await;
 
     let mut registry = FeatureRegistry::builder(Arc::new(SqliteUserRepo::new(pool.clone())))
@@ -163,6 +225,15 @@ async fn main() {
 
     // HTTP handlers share the client's `Http`, and so its view of Discord's rate limits.
     let discord = Arc::new(SerenityDiscordApi::new(client.http.clone()));
+    // Backups run on their own task: if it ever stopped, the bot should keep going.
+    if let Some(config) = backup_config {
+        let alerts = Alerts::new(discord.clone(), owner);
+        tokio::spawn(run_scheduler(
+            config.clone(),
+            backup(&pool, &config),
+            alerts,
+        ));
+    }
     let http_server = async {
         match &http_config {
             Some(config) => serve(registry.http_router(discord, config), config.port).await,

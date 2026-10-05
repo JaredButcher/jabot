@@ -37,3 +37,7 @@ bundle.tar.gz
 # Docker deployment
 data/
 secrets/
+
+# Backups: the copy made before upload (`backup/`) and pre-deploy copies (`backups/`)
+/backup/
+/backups/
